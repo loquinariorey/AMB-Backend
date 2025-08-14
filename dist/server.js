@@ -103,10 +103,11 @@ app.get('/api/performance-test', async (_req, res) => {
         });
     }
     catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         res.status(500).json({
             status: 'error',
             database: 'disconnected',
-            error: error.message,
+            error: message,
             timestamp: new Date().toISOString()
         });
     }

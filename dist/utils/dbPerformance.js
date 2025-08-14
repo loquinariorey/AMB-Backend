@@ -25,8 +25,9 @@ class DatabasePerformanceMonitor {
             this.totalQueryTime += queryTime;
             // Log slow queries (> 1000ms)
             if (queryTime > 1000) {
+                const sql = options?.sql;
                 logger.warn(`Slow query detected: ${queryTime}ms`, {
-                    query: options.sql,
+                    query: sql,
                     time: queryTime,
                     timestamp: new Date().toISOString()
                 });
