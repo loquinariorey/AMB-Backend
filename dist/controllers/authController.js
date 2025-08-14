@@ -9,10 +9,10 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const models_1 = __importDefault(require("../models"));
 const { Admin, Employer, JobSeeker, ImagePath } = models_1.default;
 const sequelize_1 = require("sequelize");
-const log_1 = __importDefault(require("../utils/logger"));
-const { logger } = log_1.default;
 const errorTypes_1 = __importDefault(require("../utils/errorTypes"));
 const { NotFoundError, BadRequestError, ForbiddenError, UnauthorizedError } = errorTypes_1.default;
+const logger_1 = __importDefault(require("../utils/logger"));
+const { logger } = logger_1.default;
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
 /**

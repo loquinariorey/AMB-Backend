@@ -15,7 +15,7 @@ router.post('/file', verifyToken, upload_chat_aws_1.default.single('file'), (req
     }
     const filePath = req.file.location;
     const fileName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
-    console.log(filePath, fileName);
+    // console.log(filePath, fileName);
     // console.log("buffer name:", Buffer.from(req.file.originalname));
     res.json({ success: true, filePath, fileName });
 });

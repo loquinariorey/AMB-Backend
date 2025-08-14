@@ -7,6 +7,8 @@ const sequelize_1 = require("sequelize");
 const models_1 = __importDefault(require("../models"));
 const { Contact, JobInfo } = models_1.default;
 const errorTypes_1 = __importDefault(require("../utils/errorTypes"));
+const logger_1 = __importDefault(require("../utils/logger"));
+const { logger } = logger_1.default;
 const { NotFoundError, BadRequestError, ForbiddenError } = errorTypes_1.default;
 /**
  * Get all clinic points for a job
@@ -112,11 +114,11 @@ const createContact = async (req, res, next) => {
                     subject: adminsubject,
                     text: admintext,
                 });
-                console.log('Contact emails sent successfully');
+                logger.info('Contact emails sent successfully: ' + name + email);
             }
             catch (mailErr) {
                 // Log but do not affect the main response
-                console.error('Failed to send contact confirmation email:', mailErr);
+                logger.error('Failed to send contact confirmation email:', mailErr);
             }
         });
     }

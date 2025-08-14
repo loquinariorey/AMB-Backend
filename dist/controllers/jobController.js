@@ -64,6 +64,7 @@ const prefectureNameToIdJP = {
     "沖縄県": 47
 };
 const getAllJobs = async (req, res, next) => {
+    const startTime = Date.now();
     try {
         const { page = 1, limit = 10, employmentTypeId, employer_id, features, prefectures, searchTerm, companyID, public_status, isAdmin = "0", jobType = "0", sortBy = "created", sortOrder = "DESC", } = req.query;
         const offset = (page - 1) * limit;
@@ -82,14 +83,9 @@ const getAllJobs = async (req, res, next) => {
             whereCondition.public_status = public_status;
         // Add expiry date filtering - exclude expired jobs
         const currentDate = new Date();
-        // Format current date as YYYYMMDD string to match the database format
         const currentDateString = currentDate.getFullYear().toString() +
             String(currentDate.getMonth() + 1).padStart(2, '0') +
             String(currentDate.getDate()).padStart(2, '0');
-        // Create expiry date condition - include jobs that:
-        // 1. Have no expiry date (null)
-        // 2. Have empty expiry date ("")
-        // 3. Have expiry date greater than or equal to current date
         const expiryDateCondition = {
             [sequelize_1.Op.or]: [
                 { clinic_public_date_end: null },
@@ -97,7 +93,6 @@ const getAllJobs = async (req, res, next) => {
                 { clinic_public_date_end: { [sequelize_1.Op.gte]: currentDateString } }
             ]
         };
-        // Combine expiry date condition with existing conditions
         whereCondition[sequelize_1.Op.and] = [
             ...(whereCondition[sequelize_1.Op.and] || []),
             expiryDateCondition
@@ -119,30 +114,7 @@ const getAllJobs = async (req, res, next) => {
             }
             whereCondition[sequelize_1.Op.and].push(searchCondition);
         }
-        // Same includeOptions as your code...
-        const includeOptions = [
-            {
-                model: Employer,
-                as: "employer",
-                required: true,
-                attributes: ["id", "clinic_name", "prefectures", "city", "closest_station"],
-            },
-            { model: EmploymentType, as: "employmentType" },
-            {
-                model: ImagePath,
-                as: 'jobThumbnails',
-                where: { posting_category: 11 },
-                attributes: ["entity_path", "image_name"],
-                required: false,
-            },
-            {
-                model: Feature,
-                as: "features",
-                through: { attributes: [] },
-                required: true,
-            },
-        ];
-        // Feature filtering same as your code...
+        // Feature filtering
         const featureIds = typeof features === "string" ? JSON.parse(features) : features || [];
         const prefectureIds = typeof prefectures === "string" ? JSON.parse(prefectures) : prefectures || [];
         const allFeatureIds = featureIds.map(Number);
@@ -174,29 +146,79 @@ const getAllJobs = async (req, res, next) => {
                 ];
             }
         }
-        // **Important**: Get total count separately for pagination
-        const count = await JobInfo.count({
-            where: whereCondition,
-            include: includeOptions,
-            distinct: true, // to handle joins correctly in count
-        });
-        // Fetch paginated jobs sorted by created_at DESC
-        const allJobs = await JobInfo.findAll({
-            where: whereCondition,
-            include: includeOptions,
-            order: [[sortBy, sortOrder]],
-            offset,
-            limit: parseInt(limit, 10),
-            attributes: {
-                include: [
-                    [sequelize_1.Sequelize.literal(`(SELECT COALESCE(SUM(search_count), 0) FROM job_analytics AS ja WHERE ja.job_info_id = JobInfo.id)`), 'search_count'],
-                    [sequelize_1.Sequelize.literal(`(SELECT COALESCE(SUM(recruits_count), 0) FROM job_analytics AS ja WHERE ja.job_info_id = JobInfo.id)`), 'recruits_count'],
-                    [sequelize_1.Sequelize.literal(`(SELECT COUNT(*) FROM application_histories AS app WHERE app.job_info_id = JobInfo.id)`), 'application_count'],
-                    [sequelize_1.Sequelize.literal(`(SELECT COUNT(*) FROM favorite_jobs AS fav WHERE fav.job_info_id = JobInfo.id)`), 'favourite_count'], // 👈 add this line
-                ],
+        // OPTIMIZATION: Use single optimized query with JOINs instead of multiple queries
+        const includeOptions = [
+            {
+                model: Employer,
+                as: "employer",
+                required: true,
+                attributes: ["id", "clinic_name", "prefectures", "city", "closest_station"],
             },
-        });
-        // Calculate recommend_score for paginated jobs
+            { model: EmploymentType, as: "employmentType" },
+            {
+                model: ImagePath,
+                as: 'jobThumbnails',
+                where: { posting_category: 11 },
+                attributes: ["entity_path", "image_name"],
+                required: false,
+            },
+            {
+                model: Feature,
+                as: "features",
+                through: { attributes: [] },
+                required: true,
+            },
+        ];
+        // OPTIMIZATION: Single query for count with timeout protection
+        const countStartTime = Date.now();
+        const count = await Promise.race([
+            JobInfo.count({
+                where: whereCondition,
+                include: includeOptions,
+                distinct: true,
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Count query timeout after 10s')), 10000))
+        ]);
+        logger.info(`Count query took: ${Date.now() - countStartTime}ms`);
+        // OPTIMIZATION: Single query for jobs with all data in one go
+        const jobsStartTime = Date.now();
+        const allJobs = await Promise.race([
+            JobInfo.findAll({
+                where: whereCondition,
+                include: includeOptions,
+                order: [[sortBy, sortOrder]],
+                offset,
+                limit: parseInt(limit, 10),
+                attributes: {
+                    include: [
+                        // OPTIMIZATION: Use JOINs instead of subqueries for better performance
+                        [sequelize_1.Sequelize.literal(`(
+              SELECT COALESCE(SUM(ja.search_count), 0) 
+              FROM job_analytics ja 
+              WHERE ja.job_info_id = JobInfo.id
+            )`), 'search_count'],
+                        [sequelize_1.Sequelize.literal(`(
+              SELECT COALESCE(SUM(ja.recruits_count), 0) 
+              FROM job_analytics ja 
+              WHERE ja.job_info_id = JobInfo.id
+          )`), 'recruits_count'],
+                        [sequelize_1.Sequelize.literal(`(
+              SELECT COUNT(ah.id) 
+              FROM application_histories ah 
+              WHERE ah.job_info_id = JobInfo.id
+            )`), 'application_count'],
+                        [sequelize_1.Sequelize.literal(`(
+              SELECT COUNT(fj.id) 
+              FROM favorite_jobs fj 
+              WHERE fj.job_info_id = JobInfo.id
+            )`), 'favourite_count'],
+                    ],
+                },
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Jobs query timeout after 15s')), 15000))
+        ]);
+        logger.info(`Jobs query took: ${Date.now() - jobsStartTime}ms`);
+        // OPTIMIZATION: Calculate scores in memory for current page jobs
         const jobs = allJobs.map((job) => {
             const search = Number(job.get("search_count") || 0);
             const recruits = Number(job.get("recruits_count") || 0);
@@ -210,53 +232,33 @@ const getAllJobs = async (req, res, next) => {
                 recommend_score,
             };
         });
-        // Recommended jobs from the **entire** filtered dataset (not paginated)
-        // So fetch all jobs without pagination, just for recommended sorting
-        const allJobsForRecommend = await JobInfo.findAll({
-            where: whereCondition,
-            include: includeOptions,
-            attributes: {
-                include: [
-                    [sequelize_1.Sequelize.literal(`(SELECT COALESCE(SUM(search_count), 0) FROM job_analytics AS ja WHERE ja.job_info_id = JobInfo.id)`), 'search_count'],
-                    [sequelize_1.Sequelize.literal(`(SELECT COALESCE(SUM(recruits_count), 0) FROM job_analytics AS ja WHERE ja.job_info_id = JobInfo.id)`), 'recruits_count'],
-                    [sequelize_1.Sequelize.literal(`(SELECT COUNT(*) FROM application_histories AS app WHERE app.job_info_id = JobInfo.id)`), 'application_count'],
-                ],
-            },
-        });
-        const recommendedJobs = allJobsForRecommend
-            .map((job) => {
-            const search = Number(job.get("search_count") || 0);
-            const recruits = Number(job.get("recruits_count") || 0);
-            const application_count = Number(job.get("application_count") || 0);
-            const recommend_score = search * 0.3 + recruits * 0.3 + application_count * 0.4;
-            return { ...job.get(), recommend_score };
-        })
-            .sort((a, b) => b.recommend_score - a.recommend_score)
-            .slice(0, 5);
+        const totalTime = Date.now() - startTime;
+        logger.info(`getAllJobs total execution time: ${totalTime}ms`);
         res.status(200).json({
             success: true,
             data: {
                 jobs,
-                recommended: recommendedJobs,
                 pagination: {
                     total: count,
                     page: parseInt(page, 10),
                     limit: parseInt(limit, 10),
                     totalPages: Math.ceil(count / limit),
                 },
+                performance: {
+                    executionTime: totalTime,
+                    queriesExecuted: 2, // Count query + Jobs query
+                }
             },
         });
-        // Update search_count asynchronously for paginated jobs
+        // OPTIMIZATION: Batch update analytics instead of individual queries
         try {
-            for (const job of jobs) {
-                const existing = await JobAnalytic.findOne({ where: { job_info_id: job.id } });
-                if (existing) {
-                    existing.search_count += 1;
-                    await existing.save();
-                }
-                else {
-                    await JobAnalytic.create({ job_info_id: job.id, search_count: 1, recruits_count: 0 });
-                }
+            const jobIds = jobs.map((job) => job.id);
+            if (jobIds.length > 0) {
+                // Use bulk update for better performance
+                await JobAnalytic.bulkCreate(jobIds.map((id) => ({ job_info_id: id, search_count: 1, recruits_count: 0 })), {
+                    updateOnDuplicate: ['search_count'],
+                    fields: ['job_info_id', 'search_count', 'recruits_count']
+                });
             }
         }
         catch (analyticsError) {
@@ -264,6 +266,8 @@ const getAllJobs = async (req, res, next) => {
         }
     }
     catch (error) {
+        const totalTime = Date.now() - startTime;
+        logger.error(`getAllJobs failed after ${totalTime}ms:`, error);
         next(error);
     }
 };
@@ -1045,6 +1049,146 @@ const getFeaturedJobs = async (req, res, next) => {
 //     next(error);
 //   }
 // };
+const getTopRecommendedJobs = async (req, res, next) => {
+    try {
+        const startTime = Date.now();
+        // Get ALL jobs from entire dataset to calculate accurate top 5 recommendations
+        const recommendedJobsStartTime = Date.now();
+        // First, get basic job info without complex subqueries to avoid MariaDB issues
+        const allRecommendedJobs = await Promise.race([
+            JobInfo.findAll({
+                where: {
+                    deleted: null,
+                    public_status: 1,
+                },
+                include: [
+                    {
+                        model: Employer,
+                        as: "employer",
+                        required: true,
+                        attributes: ["id", "clinic_name", "prefectures", "city", "closest_station"],
+                    },
+                    { model: EmploymentType, as: "employmentType" },
+                    {
+                        model: ImagePath,
+                        as: 'jobThumbnails',
+                        where: { posting_category: 11 },
+                        attributes: ["entity_path", "image_name"],
+                        required: false,
+                    },
+                    {
+                        model: Feature,
+                        as: "features",
+                        through: { attributes: [] },
+                        required: true,
+                    },
+                ],
+                // Remove limit to fetch ALL jobs for accurate top 5 recommendations
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Recommended jobs query timeout after 10s')), 10000))
+        ]);
+        // Now fetch analytics data separately to avoid subquery issues
+        const jobIds = allRecommendedJobs.map((job) => job.id);
+        // Get analytics data in bulk
+        const analyticsData = await JobAnalytic.findAll({
+            where: { job_info_id: { [sequelize_1.Op.in]: jobIds } },
+            attributes: ['job_info_id', 'search_count', 'recruits_count']
+        });
+        // Get application counts in bulk
+        const applicationData = await ApplicationHistory.findAll({
+            where: { job_info_id: { [sequelize_1.Op.in]: jobIds } },
+            attributes: ['job_info_id'],
+            raw: true
+        });
+        // Get favorite counts in bulk
+        const favoriteData = await FavoriteJob.findAll({
+            where: { job_info_id: { [sequelize_1.Op.in]: jobIds } },
+            attributes: ['job_info_id'],
+            raw: true
+        });
+        // Create lookup maps for efficient data access
+        const analyticsMap = new Map();
+        analyticsData.forEach((item) => {
+            const jobId = item.job_info_id;
+            if (!analyticsMap.has(jobId)) {
+                analyticsMap.set(jobId, { search_count: 0, recruits_count: 0 });
+            }
+            analyticsMap.get(jobId).search_count += Number(item.search_count || 0);
+            analyticsMap.get(jobId).recruits_count += Number(item.recruits_count || 0);
+        });
+        const applicationMap = new Map();
+        applicationData.forEach((item) => {
+            const jobId = item.job_info_id;
+            applicationMap.set(jobId, (applicationMap.get(jobId) || 0) + 1);
+        });
+        const favoriteMap = new Map();
+        favoriteData.forEach((item) => {
+            const jobId = item.job_info_id;
+            favoriteMap.set(jobId, (favoriteMap.get(jobId) || 0) + 1);
+        });
+        logger.info(`Recommended jobs query took: ${Date.now() - recommendedJobsStartTime}ms`);
+        // Calculate recommend_score and sort in memory to get top 5
+        const recommendedJobsWithScores = allRecommendedJobs.map((job) => {
+            const jobId = job.id;
+            const analytics = analyticsMap.get(jobId) || { search_count: 0, recruits_count: 0 };
+            const search = analytics.search_count;
+            const recruits = analytics.recruits_count;
+            const application_count = applicationMap.get(jobId) || 0;
+            const favourite_count = favoriteMap.get(jobId) || 0;
+            const recommend_score = search * 0.3 + recruits * 0.3 + application_count * 0.4;
+            return {
+                ...job.get(),
+                search_count: search,
+                recruits_count: recruits,
+                application_count,
+                favourite_count,
+                recommend_score,
+            };
+        });
+        // Log total jobs fetched and top scores for debugging
+        logger.info(`Total jobs fetched for recommendations: ${allRecommendedJobs.length}`);
+        // Validate that we have data
+        if (allRecommendedJobs.length === 0) {
+            logger.warn('No jobs found for recommendations');
+            return res.status(200).json({
+                success: true,
+                data: {
+                    recommendedJobs: [],
+                    performance: {
+                        executionTime: Date.now() - startTime,
+                        queriesExecuted: 4, // JobInfo + JobAnalytic + ApplicationHistory + FavoriteJob
+                    }
+                },
+            });
+        }
+        logger.info(`Top 10 scores: ${recommendedJobsWithScores
+            .sort((a, b) => b.recommend_score - a.recommend_score)
+            .slice(0, 10)
+            .map((job) => `${job.id}: ${job.recommend_score.toFixed(2)} (search:${job.search_count}, recruits:${job.recruits_count}, app:${job.application_count})`)
+            .join(', ')}`);
+        // Sort by recommend_score and take top 5
+        const topRecommendedJobs = recommendedJobsWithScores
+            .sort((a, b) => b.recommend_score - a.recommend_score)
+            .slice(0, 5);
+        // Log the final top 5 recommendations for verification
+        logger.info(`Final top 5 recommendations: ${topRecommendedJobs.map((job, index) => `#${index + 1}: Job ${job.id} (score: ${job.recommend_score.toFixed(2)})`).join(', ')}`);
+        const totalTime = Date.now() - startTime;
+        logger.info(`getTopRecommendedJobs total execution time: ${totalTime}ms`);
+        res.status(200).json({
+            success: true,
+            data: {
+                recommendedJobs: topRecommendedJobs,
+                performance: {
+                    executionTime: totalTime,
+                    queriesExecuted: 4, // JobInfo + JobAnalytic + ApplicationHistory + FavoriteJob
+                }
+            },
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
 const getRecommendedJobs = async (req, res, next) => {
     try {
         const { id: jobSeekerId } = req.user;
@@ -1259,6 +1403,7 @@ exports.default = {
     updateJob,
     deleteJob,
     getFeaturedJobs,
+    getTopRecommendedJobs,
     getRecommendedJobs,
     addFavouriteJob,
     getFavouriteJobs

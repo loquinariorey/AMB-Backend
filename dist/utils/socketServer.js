@@ -20,11 +20,11 @@ const initSocketServer = (httpServer) => {
         // console.log('🔌 Connected:', socket.id);
         socket.on('join', (chatId) => {
             socket.join(`chat_${chatId}`);
-            console.log(`✅ Joined chat room: chat_${chatId}`);
+            // console.log(`✅ Joined chat room: chat_${chatId}`);
         });
         socket.on('notify_join', (notifyID) => {
             socket.join(`${notifyID}`);
-            console.log(`✅ Notify: ${notifyID}`);
+            // console.log(`✅ Notify: ${notifyID}`);
         });
         socket.on('message', async (data) => {
             const { chat_id, sender, body, file_path = '', file_name = '', notifyTo } = data;
@@ -94,7 +94,7 @@ const initSocketServer = (httpServer) => {
             }
         });
         socket.on('disconnect', () => {
-            // console.log('❌ Disconnected:', socket.id);
+            console.log('❌ Disconnected:', socket.id);
         });
     });
 };

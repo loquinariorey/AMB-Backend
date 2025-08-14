@@ -104,19 +104,20 @@ app.get('/api/performance-test', async (_req: Request, res: Response) => {
     // Test database connection
     await db.sequelize.authenticate();
     const dbTime = Date.now() - startTime;
-    
-    res.status(200).json({ 
-      status: 'ok', 
+
+    res.status(200).json({
+      status: 'ok',
       database: 'connected',
       connectionTime: `${dbTime}ms`,
       timestamp: new Date().toISOString(),
       environment: process.env.NODE_ENV || 'development'
     });
   } catch (error) {
-    res.status(500).json({ 
-      status: 'error', 
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({
+      status: 'error',
       database: 'disconnected',
-      error: error.message,
+      error: message,
       timestamp: new Date().toISOString()
     });
   }
@@ -127,7 +128,7 @@ app.use(errorHandler);
 
 
 import http from 'http';
-import { initSocketServer } from './utils/socketServer'; 
+import { initSocketServer } from './utils/socketServer';
 const server = http.createServer(app);
 
 initSocketServer(server);

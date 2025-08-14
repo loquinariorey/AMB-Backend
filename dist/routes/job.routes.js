@@ -16,6 +16,7 @@ const upload_aws_1 = __importDefault(require("../middleware/upload_aws"));
 // Public routes
 router.get('/', jobController_1.default.getAllJobs);
 router.get('/featured', jobController_1.default.getFeaturedJobs);
+router.get('/recommended', jobController_1.default.getTopRecommendedJobs);
 // Job recommendations for job seekers
 router.get('/recommendations', verifyToken, isJobSeeker, jobController_1.default.getRecommendedJobs);
 router.get('/favourites', verifyToken, isJobSeeker, jobController_1.default.getFavouriteJobs);

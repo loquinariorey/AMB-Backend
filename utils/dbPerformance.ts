@@ -16,19 +16,20 @@ export class DatabasePerformanceMonitor {
 
   private setupMonitoring() {
     // Monitor query performance
-    this.sequelize.addHook('beforeQuery', (options) => {
+    this.sequelize.addHook('beforeQuery', (options: any) => {
       this.startTime = Date.now();
       this.queryCount++;
     });
 
-    this.sequelize.addHook('afterQuery', (options) => {
+    this.sequelize.addHook('afterQuery', (options: any) => {
       const queryTime = Date.now() - this.startTime;
       this.totalQueryTime += queryTime;
-      
+
       // Log slow queries (> 1000ms)
       if (queryTime > 1000) {
+        const sql = (options as any)?.sql;
         logger.warn(`Slow query detected: ${queryTime}ms`, {
-          query: options.sql,
+          query: sql,
           time: queryTime,
           timestamp: new Date().toISOString()
         });
@@ -51,7 +52,7 @@ export class DatabasePerformanceMonitor {
         averageQueryTime: this.queryCount > 0 ? Math.round(this.totalQueryTime / this.queryCount) : 0,
         timestamp: new Date().toISOString()
       };
-      
+
       // logger.info('Database pool status:', poolStatus);
     }
   }

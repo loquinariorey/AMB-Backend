@@ -8,6 +8,8 @@ const models_1 = __importDefault(require("../models"));
 const { CompanyApplication, JobInfo } = models_1.default;
 const errorTypes_1 = __importDefault(require("../utils/errorTypes"));
 const { NotFoundError, BadRequestError, ForbiddenError } = errorTypes_1.default;
+const logger_1 = __importDefault(require("../utils/logger"));
+const { logger } = logger_1.default;
 /**
  * Get all clinic points for a job
  * @route GET /api/jobs/:jobId/clinic-points
@@ -112,11 +114,11 @@ const createCompanyApplication = async (req, res, next) => {
                     subject: adminsubject,
                     text: admintext,
                 });
-                console.log('Company application emails sent successfully');
+                logger.info('Company application emails sent successfully:' + name + email);
             }
             catch (mailErr) {
                 // Log but do not affect the main response
-                console.error('Failed to send company application confirmation email:', mailErr);
+                logger.error('Failed to send company application confirmation email:', mailErr);
             }
         });
     }

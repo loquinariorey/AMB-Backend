@@ -4,11 +4,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const sequelize_1 = require("sequelize");
-const { logger } = require("sequelize/lib/utils/logger");
 const models_1 = __importDefault(require("../models"));
 const { CareerConsultation, JobInfo } = models_1.default;
 const errorTypes_1 = __importDefault(require("../utils/errorTypes"));
 const { NotFoundError, BadRequestError, ForbiddenError } = errorTypes_1.default;
+const logger_1 = __importDefault(require("../utils/logger"));
+const { logger } = logger_1.default;
 /**
  * Get all clinic points for a job
  * @route GET /api/jobs/:jobId/clinic-points
