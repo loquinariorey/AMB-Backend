@@ -166,7 +166,7 @@ const getAllJobs = async (req, res, next) => {
                 model: Feature,
                 as: "features",
                 through: { attributes: [] },
-                required: true,
+                required: false,
             },
         ];
         // OPTIMIZATION: Single query for count with timeout protection
