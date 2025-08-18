@@ -205,7 +205,7 @@ const getAllJobs = async (req: any, res: any, next: any) => {
         model: Feature,
         as: "features",
         through: { attributes: [] },
-        required: true,
+        required: false,
       },
     ];
 
