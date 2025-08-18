@@ -1,126 +1,175 @@
-# Job Portal API
+## AMB Backend API
 
-A fully structured backend project for a job portal using Node.js, Express.js, Sequelize ORM, and MySQL.
+Production-ready REST + WebSocket backend for a job portal built with Express, TypeScript, Sequelize (MySQL), Socket.IO, PM2, and AWS S3.
 
-## Features
+### Stack
+- Express, Helmet, CORS, express-rate-limit, Morgan
+- TypeScript, Node.js (LTS)
+- Sequelize (MySQL/MariaDB)
+- Socket.IO (realtime chat)
+- Multer + AWS S3 (uploads)
+- Nodemailer (SMTP)
+- Winston (structured logging)
 
-- Complete MVC architecture with proper separation of concerns
-- Authentication system with JWT tokens and role-based access control
-- Full CRUD operations for all models with Sequelize ORM
-- Comprehensive error handling and logging
-- API documentation with detailed endpoint descriptions
-- Messaging system between job seekers and employers
-- Job recommendation engine based on user profiles
-
-## Project Structure
-
+### Project structure
 ```
-├── config/             # Database and app configuration
-├── controllers/        # Route handlers
-├── middleware/         # Middleware functions
-├── models/             # Sequelize models
-├── routes/             # Express routes
-├── utils/              # Utility functions
-├── logs/               # Application logs
-├── .env.example        # Example environment variables
-├── .gitignore          # Git ignore file
-├── package.json        # Dependencies and scripts
-├── server.js           # Entry point
-└── README.md           # Project documentation
+config/                 # Database config
+controllers/            # Route handlers
+middleware/             # Auth, validation, error handler, uploads
+models/                 # Sequelize models + associations
+routes/                 # API routes
+scripts/                # Helper scripts
+utils/                  # Logger, notifications, db performance, sockets
+server.ts               # HTTP + WebSocket entrypoint
+index.ts                # Misc entry
+tsconfig.json           # TS build config
 ```
 
-## API Endpoints
+### Requirements
+- Node.js LTS (18/20)
+- MySQL/MariaDB
+- AWS S3 credentials (for uploads)
+- SMTP credentials (for emails)
 
-The API provides the following endpoints:
+### Environment variables
+Create `.env` at project root.
 
-### Authentication
+Required:
+- DB: `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_HOST`, `DB_PORT`, `DB_SSL` (optional `true`/`false`)
+- JWT: `JWT_SECRET`, `JWT_EXPIRATION` (optional, default 1d)
+- SMTP: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`
+- AWS: `AWS_ACCESS_KEY`, `AWS_SECRET_KEY`, `AWS_REGION`, `S3_BUCKET`
+- Server: `PORT` (default 3000), `NODE_ENV`, `RATE_LIMIT_WINDOW` (minutes), `RATE_LIMIT_MAX`
+- Logging: `LOG_LEVEL` (default info)
 
-- `POST /api/auth/job-seeker/register` - Register a new job seeker
-- `POST /api/auth/job-seeker/login` - Login as a job seeker
-- `POST /api/auth/employer/register` - Register a new employer
-- `POST /api/auth/employer/login` - Login as an employer
-- `POST /api/auth/admin/login` - Login as an admin
-- `GET /api/auth/me` - Get current user profile
-- `PUT /api/auth/change-password` - Change password
+### Local development
+```
+npm ci
+npm run dev   # ts-node-dev, hot reload
+```
 
-### Jobs
+Build and run:
+```
+npm run build
+npm start     # runs dist/server.js
+```
 
-- `GET /api/jobs` - Get all jobs (with filtering options)
-- `GET /api/jobs/:id` - Get job by ID
-- `POST /api/jobs` - Create a new job (employer only)
-- `PUT /api/jobs/:id` - Update job by ID (employer only)
-- `DELETE /api/jobs/:id` - Delete job by ID (employer only)
-- `GET /api/jobs/featured` - Get featured jobs
-- `GET /api/jobs/recommendations` - Get job recommendations (job seeker only)
+Health checks:
+- `GET /health` – server liveness
+- `GET /api/performance-test` – DB connectivity and timing
 
-### Employers
+### TypeScript config (important)
+Ensure `dist/` is excluded so the compiler doesn’t re-scan output:
+```
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "dist",
+    "incremental": true,
+    "tsBuildInfoFile": ".tsbuildinfo"
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
+```
 
-- `GET /api/employers/profile` - Get employer profile
-- `PUT /api/employers/profile` - Update employer profile
-- `PUT /api/employers/change-email` - Change email address
-- `GET /api/employers/jobs` - Get employer's jobs
-- `GET /api/employers/dashboard` - Get employer dashboard stats
+### Deploy on EC2 with PM2
+Install Node + PM2:
+```
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+. ~/.nvm/nvm.sh
+nvm install --lts
+npm i -g pm2
+```
 
-### Job Seekers
+Option A – Build on EC2:
+```
+git clone <REPO_URL> amb-backend && cd amb-backend
+cp /path/to/.env .env
+export NODE_OPTIONS=--max-old-space-size=4096   # if RAM-limited
+npm ci && npm run build
+pm2 start dist/server.js --name amb-api
+pm2 save
+pm2 startup systemd -u $USER --hp $HOME
+```
 
-- `GET /api/job-seekers/profile` - Get job seeker profile
-- `PUT /api/job-seekers/profile` - Update job seeker profile
-- `PUT /api/job-seekers/change-email` - Change email address
-- `GET /api/job-seekers/favorite-jobs` - Get favorite jobs
-- `POST /api/job-seekers/favorite-jobs` - Add job to favorites
-- `DELETE /api/job-seekers/favorite-jobs/:id` - Remove job from favorites
+Option B – Deploy prebuilt dist from local (fastest):
+```
+# Local
+npm ci && npm run build
+tar czf amb-dist.tgz dist package.json package-lock.json
+scp -i /path/to/key.pem amb-dist.tgz ec2-user@<EC2_IP>:~/
 
-### Applications
+# EC2
+rm -rf ~/amb-backend && mkdir ~/amb-backend && cd ~/amb-backend
+tar xzf ~/amb-dist.tgz
+cp /path/to/.env .env
+npm ci --omit=dev
+pm2 start dist/server.js --name amb-api || pm2 reload amb-api
+pm2 save
+```
 
-- `POST /api/applications` - Apply for a job
-- `GET /api/applications/job-seeker` - Get job seeker applications
-- `GET /api/applications/employer` - Get employer applications
-- `GET /api/applications/:id` - Get application details
+PM2 basics:
+```
+pm2 status
+pm2 logs amb-api --lines 100
+pm2 reload amb-api     # zero-downtime
+pm2 restart amb-api    # full restart
+pm2 stop amb-api && pm2 delete amb-api
+pm2 install pm2-logrotate
+```
 
-### Messages
+Nginx reverse proxy (with WebSockets):
+```
+server {
+  listen 80;
+  server_name your.domain.com;
 
-- `GET /api/messages/chats` - Get all chats for user
-- `GET /api/messages/chats/:id` - Get chat messages
-- `POST /api/messages/chats/:id` - Send a message
-- `POST /api/messages/start-chat` - Start a new chat
-- `GET /api/messages/unread-count` - Get unread message count
+  location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+  }
+}
+```
 
-### Admin
+### Key endpoints (selected)
+- Auth: `/api/auth/*` (register/login/me/change-password/email flows)
+- Jobs: `/api/jobs/*` (list/detail/create/update/delete/featured/recommendations/favourites)
+- Uploads: `/api` and `/api/chat-upload`
+- Realtime chat: Socket.IO events `join`, `message`, `editMessage`, `deleteMessage`
 
-- `GET /api/admin/dashboard` - Get dashboard stats
-- `GET /api/admin/employers` - Get all employers
-- `GET /api/admin/job-seekers` - Get all job seekers
-- `GET /api/admin/jobs` - Get all jobs
-- `POST /api/admin/create` - Create a new admin
-- `PUT /api/admin/users/:id/deactivate` - Deactivate a user
-- `PUT /api/admin/users/:id/reactivate` - Reactivate a user
-- `GET /api/admin/analytics` - Get analytics data
+### Logging and rate limiting
+- Winston logs to console (non-prod) and `logs/error.log`, `logs/combined.log`
+- Morgan HTTP logs via Winston stream
+- Rate limit defaults: 10k req / 15 min (tunable via env)
 
-### Analytics
+### Security notes
+- Restrict CORS allowlist in production
+- Protect Socket.IO with JWT authentication if exposed publicly
+- Keep `JWT_SECRET` strong; enable HTTPS via Nginx/ALB
 
-- `GET /api/analytics/job/:id` - Get analytics for a specific job
+### Troubleshooting
+- TypeScript OOM on EC2:
+```
+export NODE_OPTIONS=--max-old-space-size=4096
+rm -rf dist .tsbuildinfo && npm ci && npm run build
+```
+- Divergent git branches on server:
+```
+git fetch origin && git reset --hard origin/main && git clean -fd
+```
+- “Cannot find module './middleware/errorHandler'” after start:
+  - Ensure `dist/` exists and contains compiled files; rebuild or deploy prebuilt `dist`.
+- Builds feel slow:
+  - First build after deleting `.tsbuildinfo` is slow; subsequent builds cache.
 
-## Getting Started
-
-1. Clone the repository
-2. Copy `.env.example` to `.env` and update the configuration
-3. Install dependencies: `npm install`
-4. Start the server: `npm start` or `npm run dev` for development
-
-## Environment Variables
-
-The following environment variables need to be configured:
-
-- `PORT` - Port for the server (default: 3000)
-- `NODE_ENV` - Environment (development, test, production)
-- `DB_HOST` - Database host
-- `DB_PORT` - Database port
-- `DB_NAME` - Database name
-- `DB_USER` - Database user
-- `DB_PASSWORD` - Database password
-- `JWT_SECRET` - Secret key for JWT
-- `JWT_EXPIRATION` - JWT expiration time (e.g., "1d")
-
-## License
-
-[MIT](LICENSE)
+### License
+MIT
