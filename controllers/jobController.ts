@@ -274,33 +274,36 @@ const getAllJobs = async (req: any, res: any, next: any) => {
         (SELECT COUNT(ah.id) FROM application_histories ah WHERE ah.job_info_id = JobInfo.id) * 0.4
       `);
 
-      // Step 1: get top 5 JobInfo IDs within the same filtered set (avoid row explosion via GROUP BY)
-      const topIdRows = await Promise.race([
-        JobInfo.findAll({
-          where: whereCondition,
-          include: includeOptions,
-          attributes: [
-            'id',
-            [recommendScoreLiteral, 'recommend_score']
-          ],
-          order: [[recommendScoreLiteral, 'DESC']],
-          limit: 5,
-          subQuery: false,
-          group: ['JobInfo.id']
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Top IDs query timeout after 10s')), 10000))
-      ]) as any[];
+             // Step 1: get top 5 JobInfo IDs within the same filtered set (avoid row explosion via GROUP BY)
+       const topIdRows = await Promise.race([
+         JobInfo.findAll({
+           where: whereCondition,
+           include: includeOptions,
+           attributes: [
+             'id',
+             [recommendScoreLiteral, 'recommend_score']
+           ],
+           order: [[recommendScoreLiteral, 'DESC']],
+           limit: 5,
+           subQuery: false,
+           group: ['JobInfo.id']
+         }),
+         new Promise((_, reject) => setTimeout(() => reject(new Error('Top IDs query timeout after 30s')), 30000))
+       ]) as any[];
 
       const topIds = topIdRows.map((r: any) => r.id);
 
-      // Step 2: fetch full records for those IDs and include recommend_score
-      if (topIds.length > 0) {
-        const fullRows = await JobInfo.findAll({
-          where: { ...whereCondition, id: { [Op.in]: topIds } },
-          include: includeOptions,
-          attributes: { include: [[recommendScoreLiteral, 'recommend_score']] },
-          subQuery: false
-        });
+               // Step 2: fetch full records for those IDs and include recommend_score
+         if (topIds.length > 0) {
+           const fullRows = await Promise.race([
+             JobInfo.findAll({
+               where: { ...whereCondition, id: { [Op.in]: topIds } },
+               include: includeOptions,
+               attributes: { include: [[recommendScoreLiteral, 'recommend_score']] },
+               subQuery: false
+             }),
+             new Promise((_, reject) => setTimeout(() => reject(new Error('Full rows query timeout after 20s')), 20000))
+           ]) as any[];
 
         // Preserve the score order
         const orderMap = new Map<number, number>();

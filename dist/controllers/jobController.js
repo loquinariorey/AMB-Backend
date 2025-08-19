@@ -241,17 +241,20 @@ const getAllJobs = async (req, res, next) => {
                     subQuery: false,
                     group: ['JobInfo.id']
                 }),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Top IDs query timeout after 10s')), 10000))
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Top IDs query timeout after 30s')), 30000))
             ]);
             const topIds = topIdRows.map((r) => r.id);
             // Step 2: fetch full records for those IDs and include recommend_score
             if (topIds.length > 0) {
-                const fullRows = await JobInfo.findAll({
-                    where: { ...whereCondition, id: { [sequelize_1.Op.in]: topIds } },
-                    include: includeOptions,
-                    attributes: { include: [[recommendScoreLiteral, 'recommend_score']] },
-                    subQuery: false
-                });
+                const fullRows = await Promise.race([
+                    JobInfo.findAll({
+                        where: { ...whereCondition, id: { [sequelize_1.Op.in]: topIds } },
+                        include: includeOptions,
+                        attributes: { include: [[recommendScoreLiteral, 'recommend_score']] },
+                        subQuery: false
+                    }),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Full rows query timeout after 20s')), 20000))
+                ]);
                 // Preserve the score order
                 const orderMap = new Map();
                 topIds.forEach((id, idx) => orderMap.set(id, idx));
