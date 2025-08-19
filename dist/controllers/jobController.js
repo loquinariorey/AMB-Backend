@@ -300,15 +300,39 @@ const getAllJobs = async (req, res, next) => {
                 }
             },
         });
-        // OPTIMIZATION: Batch update analytics instead of individual queries
+        // OPTIMIZATION: Update existing analytics or create new ones (one record per job)
         try {
             const jobIds = jobs.map((job) => job.id);
             if (jobIds.length > 0) {
-                // Use bulk update for better performance
-                await JobAnalytic.bulkCreate(jobIds.map((id) => ({ job_info_id: id, search_count: 1, recruits_count: 0 })), {
-                    updateOnDuplicate: ['search_count'],
-                    fields: ['job_info_id', 'search_count', 'recruits_count']
+                // Get existing analytics records for these jobs
+                const existingAnalytics = await JobAnalytic.findAll({
+                    where: { job_info_id: { [sequelize_1.Op.in]: jobIds } },
+                    attributes: ['job_info_id', 'search_count', 'recruits_count']
                 });
+                // Create a map for quick lookup
+                const existingMap = new Map();
+                existingAnalytics.forEach((item) => {
+                    existingMap.set(item.job_info_id, {
+                        search_count: item.search_count || 0,
+                        recruits_count: item.recruits_count || 0
+                    });
+                });
+                // Update existing records or create new ones
+                for (const jobId of jobIds) {
+                    const existing = existingMap.get(jobId);
+                    if (existing) {
+                        // Update existing record - increment search_count
+                        await JobAnalytic.update({ search_count: existing.search_count + 1 }, { where: { job_info_id: jobId } });
+                    }
+                    else {
+                        // Create new record
+                        await JobAnalytic.create({
+                            job_info_id: jobId,
+                            search_count: 1,
+                            recruits_count: 0
+                        });
+                    }
+                }
             }
         }
         catch (analyticsError) {

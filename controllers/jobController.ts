@@ -274,36 +274,36 @@ const getAllJobs = async (req: any, res: any, next: any) => {
         (SELECT COUNT(ah.id) FROM application_histories ah WHERE ah.job_info_id = JobInfo.id) * 0.4
       `);
 
-             // Step 1: get top 5 JobInfo IDs within the same filtered set (avoid row explosion via GROUP BY)
-       const topIdRows = await Promise.race([
-         JobInfo.findAll({
-           where: whereCondition,
-           include: includeOptions,
-           attributes: [
-             'id',
-             [recommendScoreLiteral, 'recommend_score']
-           ],
-           order: [[recommendScoreLiteral, 'DESC']],
-           limit: 5,
-           subQuery: false,
-           group: ['JobInfo.id']
-         }),
-         new Promise((_, reject) => setTimeout(() => reject(new Error('Top IDs query timeout after 30s')), 30000))
-       ]) as any[];
+      // Step 1: get top 5 JobInfo IDs within the same filtered set (avoid row explosion via GROUP BY)
+      const topIdRows = await Promise.race([
+        JobInfo.findAll({
+          where: whereCondition,
+          include: includeOptions,
+          attributes: [
+            'id',
+            [recommendScoreLiteral, 'recommend_score']
+          ],
+          order: [[recommendScoreLiteral, 'DESC']],
+          limit: 5,
+          subQuery: false,
+          group: ['JobInfo.id']
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Top IDs query timeout after 30s')), 30000))
+      ]) as any[];
 
       const topIds = topIdRows.map((r: any) => r.id);
 
-               // Step 2: fetch full records for those IDs and include recommend_score
-         if (topIds.length > 0) {
-           const fullRows = await Promise.race([
-             JobInfo.findAll({
-               where: { ...whereCondition, id: { [Op.in]: topIds } },
-               include: includeOptions,
-               attributes: { include: [[recommendScoreLiteral, 'recommend_score']] },
-               subQuery: false
-             }),
-             new Promise((_, reject) => setTimeout(() => reject(new Error('Full rows query timeout after 20s')), 20000))
-           ]) as any[];
+      // Step 2: fetch full records for those IDs and include recommend_score
+      if (topIds.length > 0) {
+        const fullRows = await Promise.race([
+          JobInfo.findAll({
+            where: { ...whereCondition, id: { [Op.in]: topIds } },
+            include: includeOptions,
+            attributes: { include: [[recommendScoreLiteral, 'recommend_score']] },
+            subQuery: false
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Full rows query timeout after 20s')), 20000))
+        ]) as any[];
 
         // Preserve the score order
         const orderMap = new Map<number, number>();
@@ -357,18 +357,43 @@ const getAllJobs = async (req: any, res: any, next: any) => {
       },
     });
 
-    // OPTIMIZATION: Batch update analytics instead of individual queries
+    // OPTIMIZATION: Update existing analytics or create new ones (one record per job)
     try {
       const jobIds = jobs.map((job: any) => job.id);
       if (jobIds.length > 0) {
-        // Use bulk update for better performance
-        await JobAnalytic.bulkCreate(
-          jobIds.map((id: any) => ({ job_info_id: id, search_count: 1, recruits_count: 0 })),
-          {
-            updateOnDuplicate: ['search_count'],
-            fields: ['job_info_id', 'search_count', 'recruits_count']
+        // Get existing analytics records for these jobs
+        const existingAnalytics = await JobAnalytic.findAll({
+          where: { job_info_id: { [Op.in]: jobIds } },
+          attributes: ['job_info_id', 'search_count', 'recruits_count']
+        });
+
+        // Create a map for quick lookup
+        const existingMap = new Map();
+        existingAnalytics.forEach((item: any) => {
+          existingMap.set(item.job_info_id, {
+            search_count: item.search_count || 0,
+            recruits_count: item.recruits_count || 0
+          });
+        });
+
+        // Update existing records or create new ones
+        for (const jobId of jobIds) {
+          const existing = existingMap.get(jobId);
+          if (existing) {
+            // Update existing record - increment search_count
+            await JobAnalytic.update(
+              { search_count: existing.search_count + 1 },
+              { where: { job_info_id: jobId } }
+            );
+          } else {
+            // Create new record
+            await JobAnalytic.create({
+              job_info_id: jobId,
+              search_count: 1,
+              recruits_count: 0
+            });
           }
-        );
+        }
       }
     } catch (analyticsError) {
       logger.error("Error updating job analytics:", analyticsError);
@@ -1241,7 +1266,7 @@ const getTopRecommendedJobs = async (req: any, res: any, next: any) => {
 
     // Get ALL jobs from entire dataset to calculate accurate top 5 recommendations
     const recommendedJobsStartTime = Date.now();
-    
+
     // First, get basic job info without complex subqueries to avoid MariaDB issues
     const allRecommendedJobs = await Promise.race([
       JobInfo.findAll({
@@ -1277,30 +1302,30 @@ const getTopRecommendedJobs = async (req: any, res: any, next: any) => {
         setTimeout(() => reject(new Error('Recommended jobs query timeout after 10s')), 10000)
       )
     ]);
-    
+
     // Now fetch analytics data separately to avoid subquery issues
     const jobIds = allRecommendedJobs.map((job: any) => job.id);
-    
+
     // Get analytics data in bulk
     const analyticsData = await JobAnalytic.findAll({
       where: { job_info_id: { [Op.in]: jobIds } },
       attributes: ['job_info_id', 'search_count', 'recruits_count']
     });
-    
+
     // Get application counts in bulk
     const applicationData = await ApplicationHistory.findAll({
       where: { job_info_id: { [Op.in]: jobIds } },
       attributes: ['job_info_id'],
       raw: true
     });
-    
+
     // Get favorite counts in bulk
     const favoriteData = await FavoriteJob.findAll({
       where: { job_info_id: { [Op.in]: jobIds } },
       attributes: ['job_info_id'],
       raw: true
     });
-    
+
     // Create lookup maps for efficient data access
     const analyticsMap = new Map();
     analyticsData.forEach((item: any) => {
@@ -1311,13 +1336,13 @@ const getTopRecommendedJobs = async (req: any, res: any, next: any) => {
       analyticsMap.get(jobId).search_count += Number(item.search_count || 0);
       analyticsMap.get(jobId).recruits_count += Number(item.recruits_count || 0);
     });
-    
+
     const applicationMap = new Map();
     applicationData.forEach((item: any) => {
       const jobId = item.job_info_id;
       applicationMap.set(jobId, (applicationMap.get(jobId) || 0) + 1);
     });
-    
+
     const favoriteMap = new Map();
     favoriteData.forEach((item: any) => {
       const jobId = item.job_info_id;
@@ -1347,7 +1372,7 @@ const getTopRecommendedJobs = async (req: any, res: any, next: any) => {
 
     // Log total jobs fetched and top scores for debugging
     logger.info(`Total jobs fetched for recommendations: ${allRecommendedJobs.length}`);
-    
+
     // Validate that we have data
     if (allRecommendedJobs.length === 0) {
       logger.warn('No jobs found for recommendations');
@@ -1362,7 +1387,7 @@ const getTopRecommendedJobs = async (req: any, res: any, next: any) => {
         },
       });
     }
-    
+
     logger.info(`Top 10 scores: ${recommendedJobsWithScores
       .sort((a: any, b: any) => b.recommend_score - a.recommend_score)
       .slice(0, 10)
@@ -1373,9 +1398,9 @@ const getTopRecommendedJobs = async (req: any, res: any, next: any) => {
     const topRecommendedJobs = recommendedJobsWithScores
       .sort((a: any, b: any) => b.recommend_score - a.recommend_score)
       .slice(0, 5);
-    
+
     // Log the final top 5 recommendations for verification
-    logger.info(`Final top 5 recommendations: ${topRecommendedJobs.map((job: any, index: number) => 
+    logger.info(`Final top 5 recommendations: ${topRecommendedJobs.map((job: any, index: number) =>
       `#${index + 1}: Job ${job.id} (score: ${job.recommend_score.toFixed(2)})`
     ).join(', ')}`);
 
