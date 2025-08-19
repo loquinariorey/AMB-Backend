@@ -654,8 +654,8 @@ const updateJob = async (req, res, next) => {
         if (!job) {
             throw new NotFoundError("Job not found");
         }
-        // Check if the employer owns the job
-        if (job.employer_id != employer_id) {
+        // Check if the employer owns the job (admin can update any job)
+        if (req.user.role !== 'admin' && job.employer_id != employer_id) {
             throw new ForbiddenError("You do not have permission to update this job");
         }
         // Update job
