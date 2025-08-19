@@ -207,60 +207,42 @@ const getAllJobs = async (req, res, next) => {
                 }),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('All filtered jobs query timeout after 15s')), 15000))
             ]);
-            // Get analytics data separately for ALL filtered jobs
+            // Get analytics data for ALL filtered jobs (now includes all 4 metrics)
             const allJobIds = allFilteredJobs.map((job) => job.id);
             const analyticsData = await JobAnalytic.findAll({
                 where: { job_info_id: { [sequelize_1.Op.in]: allJobIds } },
-                attributes: ['job_info_id', 'search_count', 'recruits_count'],
+                attributes: ['job_info_id', 'search_count', 'recruits_count', 'view_count', 'favourite_count'],
                 raw: true
             });
-            // Get application counts in bulk for ALL filtered jobs
-            const applicationData = await ApplicationHistory.findAll({
-                where: { job_info_id: { [sequelize_1.Op.in]: allJobIds } },
-                attributes: ['job_info_id'],
-                raw: true
-            });
-            // Get favorite counts in bulk for ALL filtered jobs
-            const favoriteData = await FavoriteJob.findAll({
-                where: { job_info_id: { [sequelize_1.Op.in]: allJobIds } },
-                attributes: ['job_info_id'],
-                raw: true
-            });
-            // Create lookup maps for efficient data access
+            // Create lookup map for analytics data (now includes all 4 metrics)
             const analyticsMap = new Map();
             analyticsData.forEach((item) => {
                 const jobId = item.job_info_id;
                 analyticsMap.set(jobId, {
                     search_count: Number(item.search_count || 0),
-                    recruits_count: Number(item.recruits_count || 0)
+                    recruits_count: Number(item.recruits_count || 0),
+                    view_count: Number(item.view_count || 0),
+                    favourite_count: Number(item.favourite_count || 0)
                 });
-            });
-            const applicationMap = new Map();
-            applicationData.forEach((item) => {
-                const jobId = item.job_info_id;
-                applicationMap.set(jobId, (applicationMap.get(jobId) || 0) + 1);
-            });
-            const favoriteMap = new Map();
-            favoriteData.forEach((item) => {
-                const jobId = item.job_info_id;
-                favoriteMap.set(jobId, (favoriteMap.get(jobId) || 0) + 1);
             });
             // Calculate scores for ALL filtered jobs and find top 5
             const allJobsWithScores = allFilteredJobs.map((job) => {
                 const jobId = job.id;
-                const analytics = analyticsMap.get(jobId) || { search_count: 0, recruits_count: 0 };
-                const search_count = analytics.search_count;
-                const recruits_count = analytics.recruits_count;
-                const application_count = applicationMap.get(jobId) || 0;
-                const favourite_count = favoriteMap.get(jobId) || 0;
-                // Calculate recommend_score: recruits*6 + favourite*3 + search*1
-                const recommend_score = recruits_count * 6 + favourite_count * 3 + search_count * 1;
+                const analytics = analyticsMap.get(jobId) || {
+                    search_count: 0,
+                    recruits_count: 0,
+                    view_count: 0,
+                    favourite_count: 0
+                };
+                // Calculate recommend_score: recruits*6 + favourite*3 + view*1
+                // search_count = impressions in search results, view_count = actual detail page views
+                const recommend_score = analytics.recruits_count * 6 + analytics.favourite_count * 3 + analytics.view_count * 1;
                 return {
                     ...job.get(),
-                    search_count,
-                    recruits_count,
-                    application_count,
-                    favourite_count,
+                    search_count: analytics.search_count,
+                    recruits_count: analytics.recruits_count,
+                    view_count: analytics.view_count,
+                    favourite_count: analytics.favourite_count,
                     recommend_score,
                 };
             });
@@ -270,14 +252,91 @@ const getAllJobs = async (req, res, next) => {
                 .slice(0, 5);
             logger.info(`Recommended jobs calculation took: ${Date.now() - topStartTime}ms`);
         }
-        // Return jobs without analytics fields
-        const jobs = allJobs.map((job) => job.get());
+        // Get analytics data for the current page jobs to include in response
+        let jobsWithAnalytics = allJobs.map((job) => job.get());
+        try {
+            const currentPageJobIds = jobsWithAnalytics.map((job) => job.id);
+            // Get analytics data for current page jobs
+            const currentPageAnalytics = await JobAnalytic.findAll({
+                where: { job_info_id: { [sequelize_1.Op.in]: currentPageJobIds } },
+                attributes: ['job_info_id', 'search_count', 'recruits_count', 'view_count', 'favourite_count'],
+                raw: true
+            });
+            // Create lookup map for current page analytics
+            const currentPageAnalyticsMap = new Map();
+            currentPageAnalytics.forEach((analytics) => {
+                currentPageAnalyticsMap.set(analytics.job_info_id, analytics);
+            });
+            // Add analytics fields to each job
+            jobsWithAnalytics = jobsWithAnalytics.map((job) => {
+                const analytics = currentPageAnalyticsMap.get(job.id) || {
+                    search_count: 0,
+                    recruits_count: 0,
+                    view_count: 0,
+                    favourite_count: 0
+                };
+                return {
+                    ...job,
+                    search_count: Number(analytics.search_count || 0),
+                    recruits_count: Number(analytics.recruits_count || 0),
+                    view_count: Number(analytics.view_count || 0),
+                    favourite_count: Number(analytics.favourite_count || 0)
+                };
+            });
+            logger.info(`Added analytics data to ${jobsWithAnalytics.length} jobs in current page`);
+        }
+        catch (analyticsError) {
+            logger.error("Error getting analytics data for current page jobs:", analyticsError);
+            // Continue with jobs without analytics if there's an error
+        }
         const totalTime = Date.now() - startTime;
         logger.info(`getAllJobs total execution time: ${totalTime}ms`);
+        // Analytics tracking in getAllJobs:
+        // - search_count: incremented for each job shown in search results (impressions)
+        // - view_count: tracked in getJobById (individual job detail views)
+        // - recruits_count: tracked in applyForJob (job applications)
+        // - favourite_count: tracked in addFavouriteJob (favorite/unfavorite actions)
+        // Update analytics for jobs shown in search results (search_count)
+        try {
+            const jobIds = jobsWithAnalytics.map((job) => job.id);
+            // Get existing analytics records for these jobs
+            const existingAnalytics = await JobAnalytic.findAll({
+                where: { job_info_id: { [sequelize_1.Op.in]: jobIds } },
+            });
+            // Create a map for efficient lookup
+            const analyticsMap = new Map();
+            existingAnalytics.forEach((analytics) => {
+                analyticsMap.set(analytics.job_info_id, analytics);
+            });
+            // Update or create analytics records for each job in search results
+            for (const jobId of jobIds) {
+                if (analyticsMap.has(jobId)) {
+                    // Increment search_count for existing record
+                    const analytics = analyticsMap.get(jobId);
+                    analytics.search_count += 1;
+                    await analytics.save();
+                }
+                else {
+                    // Create new record with search_count = 1
+                    await JobAnalytic.create({
+                        job_info_id: jobId,
+                        search_count: 1,
+                        recruits_count: 0,
+                        view_count: 0,
+                        favourite_count: 0,
+                    });
+                }
+            }
+            logger.info(`Updated search_count for ${jobIds.length} jobs in search results`);
+        }
+        catch (analyticsError) {
+            logger.error("Error updating job analytics for search results:", analyticsError);
+            // Continue response flow, don't fail if analytics fails
+        }
         res.status(200).json({
             success: true,
             data: {
-                jobs,
+                jobs: jobsWithAnalytics,
                 recommendedJobs: String(recommend) === "1" ? recommendedJobs : undefined,
                 pagination: {
                     total: count,
@@ -287,13 +346,10 @@ const getAllJobs = async (req, res, next) => {
                 },
                 performance: {
                     executionTime: totalTime,
-                    queriesExecuted: String(recommend) === "1" ? 4 : 2, // Count query + Jobs query + (All filtered jobs + Analytics + Application + Favorite queries if recommend enabled)
+                    queriesExecuted: String(recommend) === "1" ? 4 : 3, // Count query + Jobs query + Analytics update + (All filtered jobs + Analytics queries if recommend enabled)
                 }
             },
         });
-        // Analytics tracking removed from getAllJobs to avoid double counting
-        // search_count is now only tracked in getJobById (individual job views)
-        // recruits_count is tracked in applyForJob (job applications)
     }
     catch (error) {
         const totalTime = Date.now() - startTime;
@@ -393,10 +449,49 @@ const getJobById = async (req, res, next) => {
         if (!job || job.deleted) {
             throw new NotFoundError("Job not found");
         }
-        // Return response
+        // Get analytics data for this job
+        let jobWithAnalytics = job.get();
+        try {
+            const analytics = await JobAnalytic.findOne({
+                where: { job_info_id: job.id },
+                attributes: ['search_count', 'recruits_count', 'view_count', 'favourite_count'],
+                raw: true
+            });
+            if (analytics) {
+                jobWithAnalytics = {
+                    ...jobWithAnalytics,
+                    search_count: Number(analytics.search_count || 0),
+                    recruits_count: Number(analytics.recruits_count || 0),
+                    view_count: Number(analytics.view_count || 0),
+                    favourite_count: Number(analytics.favourite_count || 0)
+                };
+            }
+            else {
+                // Set defaults if no analytics record exists
+                jobWithAnalytics = {
+                    ...jobWithAnalytics,
+                    search_count: 0,
+                    recruits_count: 0,
+                    view_count: 0,
+                    favourite_count: 0
+                };
+            }
+        }
+        catch (analyticsError) {
+            logger.error("Error getting analytics data for job:", analyticsError);
+            // Set defaults if analytics fails
+            jobWithAnalytics = {
+                ...jobWithAnalytics,
+                search_count: 0,
+                recruits_count: 0,
+                view_count: 0,
+                favourite_count: 0
+            };
+        }
+        // Return response with analytics
         res.status(200).json({
             success: true,
-            data: job,
+            data: jobWithAnalytics,
         });
         // Update analytics asynchronously (non-blocking)
         try {
@@ -404,16 +499,18 @@ const getJobById = async (req, res, next) => {
                 where: { job_info_id: job.id },
             });
             if (existing) {
-                // Record exists – increment search_count
-                existing.search_count += 1;
+                // Record exists – increment view_count
+                existing.view_count += 1;
                 await existing.save();
             }
             else {
-                // No record – create new with search_count = 1
+                // No record – create new with view_count = 1
                 await JobAnalytic.create({
                     job_info_id: job.id,
-                    search_count: 1,
+                    search_count: 0,
                     recruits_count: 0,
+                    view_count: 1,
+                    favourite_count: 0,
                 });
             }
         }
@@ -747,7 +844,7 @@ const updateJob = async (req, res, next) => {
                 const imageName = uploadedImage.key.replace(/^recruit\//, '');
                 await ImagePath.create({
                     image_name: imageName,
-                    entity_path: `/recruit/${uploadedImage.imageName}`,
+                    entity_path: `/recruit/${imageName}`,
                     posting_category: 14,
                     parent_id: newStaff.id,
                 });
@@ -1079,240 +1176,6 @@ const getFeaturedJobs = async (req, res, next) => {
 //     next(error);
 //   }
 // };
-const getTopRecommendedJobs = async (req, res, next) => {
-    try {
-        const startTime = Date.now();
-        // Get ALL jobs from entire dataset to calculate accurate top 5 recommendations
-        const recommendedJobsStartTime = Date.now();
-        // First, get basic job info without complex subqueries to avoid MariaDB issues
-        const allRecommendedJobs = await Promise.race([
-            JobInfo.findAll({
-                where: {
-                    deleted: null,
-                    public_status: 1,
-                },
-                include: [
-                    {
-                        model: Employer,
-                        as: "employer",
-                        required: true,
-                        attributes: ["id", "clinic_name", "prefectures", "city", "closest_station"],
-                    },
-                    { model: EmploymentType, as: "employmentType" },
-                    {
-                        model: ImagePath,
-                        as: 'jobThumbnails',
-                        where: { posting_category: 11 },
-                        attributes: ["entity_path", "image_name"],
-                        required: false,
-                    },
-                    {
-                        model: Feature,
-                        as: "features",
-                        through: { attributes: [] },
-                        required: true,
-                    },
-                ],
-                // Remove limit to fetch ALL jobs for accurate top 5 recommendations
-            }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Recommended jobs query timeout after 10s')), 10000))
-        ]);
-        // Now fetch analytics data separately to avoid subquery issues
-        const jobIds = allRecommendedJobs.map((job) => job.id);
-        // Get analytics data in bulk
-        const analyticsData = await JobAnalytic.findAll({
-            where: { job_info_id: { [sequelize_1.Op.in]: jobIds } },
-            attributes: ['job_info_id', 'search_count', 'recruits_count']
-        });
-        // Get application counts in bulk
-        const applicationData = await ApplicationHistory.findAll({
-            where: { job_info_id: { [sequelize_1.Op.in]: jobIds } },
-            attributes: ['job_info_id'],
-            raw: true
-        });
-        // Get favorite counts in bulk
-        const favoriteData = await FavoriteJob.findAll({
-            where: { job_info_id: { [sequelize_1.Op.in]: jobIds } },
-            attributes: ['job_info_id'],
-            raw: true
-        });
-        // Create lookup maps for efficient data access
-        const analyticsMap = new Map();
-        analyticsData.forEach((item) => {
-            const jobId = item.job_info_id;
-            if (!analyticsMap.has(jobId)) {
-                analyticsMap.set(jobId, { search_count: 0, recruits_count: 0 });
-            }
-            analyticsMap.get(jobId).search_count += Number(item.search_count || 0);
-            analyticsMap.get(jobId).recruits_count += Number(item.recruits_count || 0);
-        });
-        const applicationMap = new Map();
-        applicationData.forEach((item) => {
-            const jobId = item.job_info_id;
-            applicationMap.set(jobId, (applicationMap.get(jobId) || 0) + 1);
-        });
-        const favoriteMap = new Map();
-        favoriteData.forEach((item) => {
-            const jobId = item.job_info_id;
-            favoriteMap.set(jobId, (favoriteMap.get(jobId) || 0) + 1);
-        });
-        logger.info(`Recommended jobs query took: ${Date.now() - recommendedJobsStartTime}ms`);
-        // Calculate recommend_score and sort in memory to get top 5
-        const recommendedJobsWithScores = allRecommendedJobs.map((job) => {
-            const jobId = job.id;
-            const analytics = analyticsMap.get(jobId) || { search_count: 0, recruits_count: 0 };
-            const search = analytics.search_count;
-            const recruits = analytics.recruits_count;
-            const application_count = applicationMap.get(jobId) || 0;
-            const favourite_count = favoriteMap.get(jobId) || 0;
-            const recommend_score = search * 0.3 + recruits * 0.3 + application_count * 0.4;
-            return {
-                ...job.get(),
-                search_count: search,
-                recruits_count: recruits,
-                application_count,
-                favourite_count,
-                recommend_score,
-            };
-        });
-        // Log total jobs fetched and top scores for debugging
-        logger.info(`Total jobs fetched for recommendations: ${allRecommendedJobs.length}`);
-        // Validate that we have data
-        if (allRecommendedJobs.length === 0) {
-            logger.warn('No jobs found for recommendations');
-            return res.status(200).json({
-                success: true,
-                data: {
-                    recommendedJobs: [],
-                    performance: {
-                        executionTime: Date.now() - startTime,
-                        queriesExecuted: 4, // JobInfo + JobAnalytic + ApplicationHistory + FavoriteJob
-                    }
-                },
-            });
-        }
-        logger.info(`Top 10 scores: ${recommendedJobsWithScores
-            .sort((a, b) => b.recommend_score - a.recommend_score)
-            .slice(0, 10)
-            .map((job) => `${job.id}: ${job.recommend_score.toFixed(2)} (search:${job.search_count}, recruits:${job.recruits_count}, app:${job.application_count})`)
-            .join(', ')}`);
-        // Sort by recommend_score and take top 5
-        const topRecommendedJobs = recommendedJobsWithScores
-            .sort((a, b) => b.recommend_score - a.recommend_score)
-            .slice(0, 5);
-        // Log the final top 5 recommendations for verification
-        logger.info(`Final top 5 recommendations: ${topRecommendedJobs.map((job, index) => `#${index + 1}: Job ${job.id} (score: ${job.recommend_score.toFixed(2)})`).join(', ')}`);
-        const totalTime = Date.now() - startTime;
-        logger.info(`getTopRecommendedJobs total execution time: ${totalTime}ms`);
-        res.status(200).json({
-            success: true,
-            data: {
-                recommendedJobs: topRecommendedJobs,
-                performance: {
-                    executionTime: totalTime,
-                    queriesExecuted: 4, // JobInfo + JobAnalytic + ApplicationHistory + FavoriteJob
-                }
-            },
-        });
-    }
-    catch (error) {
-        next(error);
-    }
-};
-const getRecommendedJobs = async (req, res, next) => {
-    try {
-        const { id: jobSeekerId } = req.user;
-        const { limit = 10 } = req.query;
-        const jobSeeker = await JobSeeker.findByPk(jobSeekerId, {
-            include: [
-                { model: EmploymentType, as: "employmentTypes", through: { attributes: [] } },
-                { model: DesiredCondition, as: "desiredConditions", through: { attributes: [] } },
-            ],
-        });
-        if (!jobSeeker)
-            throw new NotFoundError("Job seeker not found");
-        const employmentTypeIds = jobSeeker.employmentTypes.map((t) => t.id);
-        const preferredPrefectures = jobSeeker.prefectures;
-        const whereCondition = {
-            deleted: null,
-            public_status: 1,
-        };
-        // Uncomment if you want to filter by employment types
-        // if (employmentTypeIds.length > 0) {
-        //   whereCondition.employment_type_id = { [Op.in]: employmentTypeIds };
-        // }
-        const jobs = await JobInfo.findAll({
-            where: whereCondition,
-            include: [
-                {
-                    model: Employer,
-                    as: "employer",
-                    attributes: ["id", "clinic_name", "prefectures", "city", "closest_station"],
-                    // *** Filter by prefecture if available ***
-                    where: preferredPrefectures ? { prefectures: preferredPrefectures } : undefined,
-                },
-                {
-                    model: EmploymentType,
-                    as: "employmentType",
-                },
-                {
-                    model: Feature,
-                    as: "features",
-                    through: { attributes: [] },
-                },
-                {
-                    model: JobAnalytic,
-                    as: "job_analytics", // *** Correct alias here ***
-                    attributes: [], // We will include its fields explicitly below
-                },
-                {
-                    model: ApplicationHistory,
-                    as: "applications",
-                },
-            ],
-            attributes: {
-                include: [
-                    [sequelize_1.Sequelize.col("job_analytics.search_count"), "search_count"],
-                    [sequelize_1.Sequelize.col("job_analytics.recruits_count"), "recruits_count"],
-                    // <-- UPDATED: Use correlated subquery to get accurate application_count -->
-                    [
-                        sequelize_1.Sequelize.literal(`(
-        SELECT COUNT(*)
-        FROM application_histories AS ah
-        WHERE ah.job_info_id = JobInfo.id
-      )`),
-                        "application_count"
-                    ],
-                    // Updated recommend_score using above count subquery result
-                    [
-                        sequelize_1.Sequelize.literal(`
-        COALESCE(job_analytics.search_count, 0) * 0.3 +
-        COALESCE(job_analytics.recruits_count, 0) * 0.3 +
-        (
-          SELECT COUNT(*)
-          FROM application_histories AS ah
-          WHERE ah.job_info_id = JobInfo.id
-        ) * 4
-      `),
-                        "recommend_score"
-                    ],
-                ],
-            },
-            // *** Group by all non-aggregated columns ***
-            group: ["JobInfo.id", "employer.id", "employmentType.id", "job_analytics.id"],
-            order: [[sequelize_1.Sequelize.literal("recommend_score"), "DESC"]],
-            limit: parseInt(limit, 10),
-            subQuery: false, // Important for correct grouping & limit
-        });
-        res.status(200).json({
-            success: true,
-            data: jobs,
-        });
-    }
-    catch (error) {
-        next(error);
-    }
-};
 const addFavouriteJob = async (req, res, next) => {
     try {
         const job_seeker_id = req.user.id;
@@ -1327,6 +1190,19 @@ const addFavouriteJob = async (req, res, next) => {
         if (existingFavorite) {
             // If exists → remove (toggle off)
             await existingFavorite.destroy();
+            // Decrement favourite_count in analytics
+            try {
+                const existingAnalytics = await JobAnalytic.findOne({
+                    where: { job_info_id: job_info_id },
+                });
+                if (existingAnalytics && existingAnalytics.favourite_count > 0) {
+                    existingAnalytics.favourite_count -= 1;
+                    await existingAnalytics.save();
+                }
+            }
+            catch (analyticsError) {
+                logger.error("Error updating job analytics for unfavorite:", analyticsError);
+            }
             return res.status(200).json({
                 success: true,
                 message: "Removed from your favourite jobs.",
@@ -1335,6 +1211,28 @@ const addFavouriteJob = async (req, res, next) => {
         }
         // Else → Create favorite (toggle on)
         const favouritejob = await FavoriteJob.create({ job_seeker_id, job_info_id });
+        // Increment favourite_count in analytics
+        try {
+            const existingAnalytics = await JobAnalytic.findOne({
+                where: { job_info_id: job_info_id },
+            });
+            if (existingAnalytics) {
+                existingAnalytics.favourite_count += 1;
+                await existingAnalytics.save();
+            }
+            else {
+                await JobAnalytic.create({
+                    job_info_id: job_info_id,
+                    search_count: 0,
+                    recruits_count: 0,
+                    view_count: 0,
+                    favourite_count: 1,
+                });
+            }
+        }
+        catch (analyticsError) {
+            logger.error("Error updating job analytics for favorite:", analyticsError);
+        }
         const createdfavouritejob = await FavoriteJob.findByPk(favouritejob.id, {
             include: [
                 {
@@ -1433,8 +1331,6 @@ exports.default = {
     updateJob,
     deleteJob,
     getFeaturedJobs,
-    getTopRecommendedJobs,
-    getRecommendedJobs,
     addFavouriteJob,
     getFavouriteJobs
 };

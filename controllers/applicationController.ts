@@ -101,6 +101,8 @@ const applyForJob = async (req: any, res: any, next: any) => {
           job_info_id: job_info_id,
           search_count: 0,
           recruits_count: 1,
+          view_count: 0,
+          favourite_count: 0,
         });
       }
     } catch (analyticsError) {

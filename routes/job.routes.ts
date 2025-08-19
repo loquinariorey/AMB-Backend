@@ -14,10 +14,8 @@ import upload from "../middleware/upload_aws";
 // Public routes
 router.get('/', jobController.getAllJobs);
 router.get('/featured', jobController.getFeaturedJobs);
-router.get('/recommended', jobController.getTopRecommendedJobs);
 
-// Job recommendations for job seekers
-router.get('/recommendations', verifyToken, isJobSeeker, jobController.getRecommendedJobs);
+// Job favourites for job seekers
 router.get('/favourites', verifyToken, isJobSeeker, jobController.getFavouriteJobs);
 
 // Get job by ID with ID validation

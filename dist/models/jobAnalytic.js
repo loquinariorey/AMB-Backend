@@ -35,6 +35,16 @@ exports.default = (sequelize, DataTypes) => {
             defaultValue: 0,
             comment: 'recruits_count'
         },
+        view_count: {
+            type: DataTypes.INTEGER,
+            defaultValue: 0,
+            comment: 'Total job detail page views'
+        },
+        favourite_count: {
+            type: DataTypes.INTEGER,
+            defaultValue: 0,
+            comment: 'Total times job was favorited'
+        },
         deleted: {
             type: DataTypes.DATE,
             comment: 'deleted'

@@ -47,8 +47,10 @@ router.get('/job/:id', verifyToken, isEmployer, async (req, res, next) => {
         const analytics = await JobAnalytic.findAll({
             attributes: [
                 ...groupBy,
-                [sequelize.fn('SUM', sequelize.col('search_count')), 'total_views'],
-                [sequelize.fn('SUM', sequelize.col('recruits_count')), 'total_clicks']
+                [sequelize.fn('SUM', sequelize.col('search_count')), 'total_searches'],
+                [sequelize.fn('SUM', sequelize.col('recruits_count')), 'total_applications'],
+                [sequelize.fn('SUM', sequelize.col('view_count')), 'total_views'],
+                [sequelize.fn('SUM', sequelize.col('favourite_count')), 'total_favourites']
             ],
             where: whereCondition,
             group: groupBy,
