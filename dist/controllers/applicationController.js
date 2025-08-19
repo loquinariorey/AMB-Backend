@@ -5,9 +5,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const sequelize_1 = require("sequelize");
 const models_1 = __importDefault(require("../models"));
-const { ApplicationHistory, JobInfo, JobSeeker, Chat, ChatBody, Employer, Feature, RecruitingCriteria, ImagePath } = models_1.default;
+const { ApplicationHistory, JobInfo, JobSeeker, Chat, ChatBody, Employer, Feature, RecruitingCriteria, ImagePath, JobAnalytic } = models_1.default;
 const errorTypes_1 = __importDefault(require("../utils/errorTypes"));
 const { NotFoundError, BadRequestError, ForbiddenError } = errorTypes_1.default;
+const logger_1 = __importDefault(require("../utils/logger"));
+const { logger } = logger_1.default;
 /**
  * Apply for a job
  * @route POST /api/applications
@@ -74,6 +76,29 @@ const applyForJob = async (req, res, next) => {
             job_title: job.job_title,
             chat_id: chat.id
         });
+        // ✅ Update job analytics - increment recruits_count
+        try {
+            const existingAnalytics = await JobAnalytic.findOne({
+                where: { job_info_id: job_info_id },
+            });
+            if (existingAnalytics) {
+                // Record exists – increment recruits_count
+                existingAnalytics.recruits_count += 1;
+                await existingAnalytics.save();
+            }
+            else {
+                // No record – create new with recruits_count = 1
+                await JobAnalytic.create({
+                    job_info_id: job_info_id,
+                    search_count: 0,
+                    recruits_count: 1,
+                });
+            }
+        }
+        catch (analyticsError) {
+            logger.error("Error updating job analytics for application:", analyticsError);
+            // Continue response flow, don't fail if analytics fails
+        }
         res.status(201).json({
             success: true,
             data: application,

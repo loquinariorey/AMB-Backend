@@ -232,31 +232,6 @@ const getAllJobs = async (req: any, res: any, next: any) => {
         order: [[sortBy, sortOrder]],
         offset,
         limit: parseInt(limit, 10),
-        attributes: {
-          include: [
-            // OPTIMIZATION: Use JOINs instead of subqueries for better performance
-            [Sequelize.literal(`(
-              SELECT COALESCE(SUM(ja.search_count), 0) 
-              FROM job_analytics ja 
-              WHERE ja.job_info_id = JobInfo.id
-            )`), 'search_count'],
-            [Sequelize.literal(`(
-              SELECT COALESCE(SUM(ja.recruits_count), 0) 
-              FROM job_analytics ja 
-              WHERE ja.job_info_id = JobInfo.id
-          )`), 'recruits_count'],
-            [Sequelize.literal(`(
-              SELECT COUNT(ah.id) 
-              FROM application_histories ah 
-              WHERE ah.job_info_id = JobInfo.id
-            )`), 'application_count'],
-            [Sequelize.literal(`(
-              SELECT COUNT(fj.id) 
-              FROM favorite_jobs fj 
-              WHERE fj.job_info_id = JobInfo.id
-            )`), 'favourite_count'],
-          ],
-        },
       }),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Jobs query timeout after 15s')), 15000)
@@ -264,77 +239,102 @@ const getAllJobs = async (req: any, res: any, next: any) => {
     ]);
     logger.info(`Jobs query took: ${Date.now() - jobsStartTime}ms`);
 
-    // If recommend filter is enabled, compute top 5 recommended within the same filtered set (ignores pagination)
+    // If recommend filter is enabled, find top 5 recommended from ALL filtered jobs (not just current page)
     let recommendedJobs: any[] = [];
     if (String(recommend) === "1") {
       const topStartTime = Date.now();
-      const recommendScoreLiteral = Sequelize.literal(`
-        COALESCE((SELECT SUM(ja.search_count) FROM job_analytics ja WHERE ja.job_info_id = JobInfo.id), 0) * 0.3 +
-        COALESCE((SELECT SUM(ja.recruits_count) FROM job_analytics ja WHERE ja.job_info_id = JobInfo.id), 0) * 0.3 +
-        (SELECT COUNT(ah.id) FROM application_histories ah WHERE ah.job_info_id = JobInfo.id) * 0.4
-      `);
-
-      // Step 1: get top 5 JobInfo IDs within the same filtered set (avoid row explosion via GROUP BY)
-      const topIdRows = await Promise.race([
+      
+      // Get ALL filtered jobs (without pagination) to calculate recommendations
+      // Include analytics data directly using the relationship
+      const allFilteredJobs = await Promise.race([
         JobInfo.findAll({
           where: whereCondition,
-          include: includeOptions,
-          attributes: [
-            'id',
-            [recommendScoreLiteral, 'recommend_score']
-          ],
-          order: [[recommendScoreLiteral, 'DESC']],
-          limit: 5,
-          subQuery: false,
-          group: ['JobInfo.id']
+          include: includeOptions, // Don't include analytics here
+          // Remove pagination to get ALL filtered jobs for recommendations
         }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Top IDs query timeout after 30s')), 30000))
-      ]) as any[];
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('All filtered jobs query timeout after 15s')), 15000)
+        )
+      ]);
+      
+      // Get analytics data separately for ALL filtered jobs
+      const allJobIds = allFilteredJobs.map((job: any) => job.id);
+      const analyticsData = await JobAnalytic.findAll({
+        where: { job_info_id: { [Op.in]: allJobIds } },
+        attributes: ['job_info_id', 'search_count', 'recruits_count'],
+        raw: true
+      });
 
-      const topIds = topIdRows.map((r: any) => r.id);
+      // Get application counts in bulk for ALL filtered jobs
+      const applicationData = await ApplicationHistory.findAll({
+        where: { job_info_id: { [Op.in]: allJobIds } },
+        attributes: ['job_info_id'],
+        raw: true
+      });
 
-      // Step 2: fetch full records for those IDs and include recommend_score
-      if (topIds.length > 0) {
-        const fullRows = await Promise.race([
-          JobInfo.findAll({
-            where: { ...whereCondition, id: { [Op.in]: topIds } },
-            include: includeOptions,
-            attributes: { include: [[recommendScoreLiteral, 'recommend_score']] },
-            subQuery: false
-          }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Full rows query timeout after 20s')), 20000))
-        ]) as any[];
+      // Get favorite counts in bulk for ALL filtered jobs
+      const favoriteData = await FavoriteJob.findAll({
+        where: { job_info_id: { [Op.in]: allJobIds } },
+        attributes: ['job_info_id'],
+        raw: true
+      });
 
-        // Preserve the score order
-        const orderMap = new Map<number, number>();
-        topIds.forEach((id: number, idx: number) => orderMap.set(id, idx));
-        recommendedJobs = fullRows.sort((a: any, b: any) => {
-          return (orderMap.get(a.id) ?? 0) - (orderMap.get(b.id) ?? 0);
+
+
+      // Create lookup maps for efficient data access
+      const analyticsMap = new Map();
+      analyticsData.forEach((item: any) => {
+        const jobId = item.job_info_id;
+        analyticsMap.set(jobId, { 
+          search_count: Number(item.search_count || 0), 
+          recruits_count: Number(item.recruits_count || 0) 
         });
-      } else {
-        recommendedJobs = [];
-      }
+      });
 
-      logger.info(`Top recommended query took: ${Date.now() - topStartTime}ms`);
+      const applicationMap = new Map();
+      applicationData.forEach((item: any) => {
+        const jobId = item.job_info_id;
+        applicationMap.set(jobId, (applicationMap.get(jobId) || 0) + 1);
+      });
+
+      const favoriteMap = new Map();
+      favoriteData.forEach((item: any) => {
+        const jobId = item.job_info_id;
+        favoriteMap.set(jobId, (favoriteMap.get(jobId) || 0) + 1);
+      });
+
+      // Calculate scores for ALL filtered jobs and find top 5
+      const allJobsWithScores = allFilteredJobs.map((job: any) => {
+        const jobId = job.id;
+        const analytics = analyticsMap.get(jobId) || { search_count: 0, recruits_count: 0 };
+        const search_count = analytics.search_count;
+        const recruits_count = analytics.recruits_count;
+        const application_count = applicationMap.get(jobId) || 0;
+        const favourite_count = favoriteMap.get(jobId) || 0;
+        
+        // Calculate recommend_score: recruits*6 + favourite*3 + search*1
+        const recommend_score = recruits_count * 6 + favourite_count * 3 + search_count * 1;
+
+        return {
+          ...job.get(),
+          search_count,
+          recruits_count,
+          application_count,
+          favourite_count,
+          recommend_score,
+        };
+      });
+
+      // Sort by recommend_score (highest first) and take top 5 from ALL filtered jobs
+      recommendedJobs = allJobsWithScores
+        .sort((a: any, b: any) => b.recommend_score - a.recommend_score)
+        .slice(0, 5);
+
+      logger.info(`Recommended jobs calculation took: ${Date.now() - topStartTime}ms`);
     }
 
-    // OPTIMIZATION: Calculate scores in memory for current page jobs
-    const jobs = allJobs.map((job: any) => {
-      const search = Number(job.get("search_count") || 0);
-      const recruits = Number(job.get("recruits_count") || 0);
-      const application_count = Number(job.get("application_count") || 0);
-      const recommend_score = search * 0.3 + recruits * 0.3 + application_count * 0.4;
-
-      return {
-        ...job.get(),
-        search_count: search,
-        recruits_count: recruits,
-        application_count,
-        recommend_score,
-      };
-    });
-
-
+    // Return jobs without analytics fields
+    const jobs = allJobs.map((job: any) => job.get());
 
     const totalTime = Date.now() - startTime;
     logger.info(`getAllJobs total execution time: ${totalTime}ms`);
@@ -352,52 +352,14 @@ const getAllJobs = async (req: any, res: any, next: any) => {
         },
         performance: {
           executionTime: totalTime,
-          queriesExecuted: 2, // Count query + Jobs query
+          queriesExecuted: String(recommend) === "1" ? 4 : 2, // Count query + Jobs query + (All filtered jobs + Analytics + Application + Favorite queries if recommend enabled)
         }
       },
     });
 
-    // OPTIMIZATION: Update existing analytics or create new ones (one record per job)
-    try {
-      const jobIds = jobs.map((job: any) => job.id);
-      if (jobIds.length > 0) {
-        // Get existing analytics records for these jobs
-        const existingAnalytics = await JobAnalytic.findAll({
-          where: { job_info_id: { [Op.in]: jobIds } },
-          attributes: ['job_info_id', 'search_count', 'recruits_count']
-        });
-
-        // Create a map for quick lookup
-        const existingMap = new Map();
-        existingAnalytics.forEach((item: any) => {
-          existingMap.set(item.job_info_id, {
-            search_count: item.search_count || 0,
-            recruits_count: item.recruits_count || 0
-          });
-        });
-
-        // Update existing records or create new ones
-        for (const jobId of jobIds) {
-          const existing = existingMap.get(jobId);
-          if (existing) {
-            // Update existing record - increment search_count
-            await JobAnalytic.update(
-              { search_count: existing.search_count + 1 },
-              { where: { job_info_id: jobId } }
-            );
-          } else {
-            // Create new record
-            await JobAnalytic.create({
-              job_info_id: jobId,
-              search_count: 1,
-              recruits_count: 0
-            });
-          }
-        }
-      }
-    } catch (analyticsError) {
-      logger.error("Error updating job analytics:", analyticsError);
-    }
+    // Analytics tracking removed from getAllJobs to avoid double counting
+    // search_count is now only tracked in getJobById (individual job views)
+    // recruits_count is tracked in applyForJob (job applications)
 
   } catch (error) {
     const totalTime = Date.now() - startTime;
@@ -515,14 +477,14 @@ const getJobById = async (req: any, res: any, next: any) => {
 
       if (existing) {
         // Record exists – increment search_count
-        existing.recruits_count += 1;
+        existing.search_count += 1;
         await existing.save();
       } else {
         // No record – create new with search_count = 1
         await JobAnalytic.create({
           job_info_id: job.id,
-          search_count: 0,
-          recruits_count: 1, // Optional default
+          search_count: 1,
+          recruits_count: 0,
         });
       }
     } catch (analyticsError) {

@@ -1,9 +1,11 @@
 import { Op } from 'sequelize';
 import db from '../models';
-const { ApplicationHistory, JobInfo, JobSeeker, Chat, ChatBody, Employer, Feature, RecruitingCriteria, ImagePath } = db;
+const { ApplicationHistory, JobInfo, JobSeeker, Chat, ChatBody, Employer, Feature, RecruitingCriteria, ImagePath, JobAnalytic } = db;
 
 import errorTypes from '../utils/errorTypes';
 const { NotFoundError, BadRequestError, ForbiddenError } = errorTypes;
+import log from '../utils/logger';
+const { logger } = log;
 
 /**
  * Apply for a job
@@ -82,6 +84,29 @@ const applyForJob = async (req: any, res: any, next: any) => {
       job_title: job.job_title,
       chat_id: chat.id
     });
+
+    // ✅ Update job analytics - increment recruits_count
+    try {
+      const existingAnalytics = await JobAnalytic.findOne({
+        where: { job_info_id: job_info_id },
+      });
+
+      if (existingAnalytics) {
+        // Record exists – increment recruits_count
+        existingAnalytics.recruits_count += 1;
+        await existingAnalytics.save();
+      } else {
+        // No record – create new with recruits_count = 1
+        await JobAnalytic.create({
+          job_info_id: job_info_id,
+          search_count: 0,
+          recruits_count: 1,
+        });
+      }
+    } catch (analyticsError) {
+      logger.error("Error updating job analytics for application:", analyticsError);
+      // Continue response flow, don't fail if analytics fails
+    }
 
     res.status(201).json({
       success: true,
