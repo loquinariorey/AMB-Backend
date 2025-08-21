@@ -918,9 +918,17 @@ const updateJob = async (req: any, res: any, next: any) => {
       }
     }
 
-    // Save job thumbnail image (posting_category = 11)
-    if (req.files?.thumbnail && req.files.thumbnail.length > 0) {
+    // ________________________ UPDATE JOB THUMBNAIL _______________________
+    // Clean up old thumbnail images first
+    await ImagePath.destroy({
+      where: { 
+        parent_id: job.id,
+        posting_category: 11  // Thumbnail images
+      }
+    });
 
+    // Save new job thumbnail image (posting_category = 11)
+    if (req.files?.thumbnail && req.files.thumbnail.length > 0) {
       const file = req.files.thumbnail[0];
       const imageName = file.key.replace(/^recruit\//, '');
       await ImagePath.create({
@@ -943,6 +951,21 @@ const updateJob = async (req: any, res: any, next: any) => {
     const staffInfos = typeof req.body.staffInfos === "string" ? JSON.parse(req.body.staffInfos) : req.body.staffInfos;
     const workplaceIntroductions = typeof req.body.workplaceIntroductions === "string" ? JSON.parse(req.body.workplaceIntroductions) : req.body.workplaceIntroductions;
 
+    // Clean up old staff info images first
+    const oldStaffInfos = await JobInfoStaffInfo.findAll({ 
+      where: { job_info_id: job.id },
+      attributes: ['id']
+    });
+    const oldStaffInfoIds = oldStaffInfos.map((staff: any) => staff.id);
+    if (oldStaffInfoIds.length > 0) {
+      await ImagePath.destroy({
+        where: { 
+          parent_id: { [Op.in]: oldStaffInfoIds },
+          posting_category: 14  // Staff images
+        }
+      });
+    }
+    
     await JobInfoStaffInfo.destroy({ where: { job_info_id: job.id } }); // Clear old ones first
 
     let fileindex = 0;
@@ -977,6 +1000,21 @@ const updateJob = async (req: any, res: any, next: any) => {
       }
     }
 
+    // Clean up old workplace introduction images first
+    const oldWorkplaceInfos = await JobInfoWorkplaceIntroduction.findAll({ 
+      where: { job_info_id: job.id },
+      attributes: ['id']
+    });
+    const oldWorkplaceInfoIds = oldWorkplaceInfos.map((workplace: any) => workplace.id);
+    if (oldWorkplaceInfoIds.length > 0) {
+      await ImagePath.destroy({
+        where: { 
+          parent_id: { [Op.in]: oldWorkplaceInfoIds },
+          posting_category: 13  // Workplace images
+        }
+      });
+    }
+    
     await JobInfoWorkplaceIntroduction.destroy({ where: { job_info_id: job.id } });
 
 
