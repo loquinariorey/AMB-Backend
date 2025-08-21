@@ -1,7 +1,7 @@
 // controllers/chatController.ts
 import { Request, Response, NextFunction } from 'express';
 import db from '../models';
-import { Op } from 'sequelize';
+import { Op, Sequelize } from 'sequelize';
 import { AuthenticatedRequest } from '../types';
 
 const { Chat, ChatBody, JobInfo, JobSeeker, Employer, ImagePath } = db;
@@ -74,29 +74,45 @@ const getUserChats = async (req: AuthenticatedRequest, res: Response, next: Next
       where: chatWhere,
     });
 
-    // 📨 Add unread count per chat
-    const chatListWithUnread = await Promise.all(
-      chats.map(async (chat: any) => {
-        const unreadCount = await ChatBody.count({
-          where: {
-            chat_id: chat.id,
-            is_readed: 0,
-            sender: user.role === 'jobseeker' ? 2 : 1,
-          },
-        });
+    // 📨 Get unread counts for all chats in one query (fixes N+1 problem)
+    const chatIds = chats.map((chat: any) => chat.id);
+    let unreadCounts: any[] = [];
+    
+    if (chatIds.length > 0) {
+      unreadCounts = await ChatBody.findAll({
+        where: {
+          chat_id: { [Op.in]: chatIds },
+          is_readed: 0,
+          sender: user.role === 'jobseeker' ? 2 : 1,
+        },
+        attributes: [
+          'chat_id',
+          [Sequelize.fn('COUNT', '*'), 'count']
+        ],
+        group: ['chat_id'],
+        raw: true
+      });
+    }
 
-        const latestMessage = chat.messages[0];
-        return {
-          ...chat.toJSON(),
-          unreadCount,
-          lastMessageTime: latestMessage?.created || chat.created,
-        };
-      })
-    );
+    // Create lookup map for unread counts
+    const unreadCountMap = new Map();
+    unreadCounts.forEach((item: any) => {
+      unreadCountMap.set(item.chat_id, Number(item.count || 0));
+    });
+
+    // Add unread counts to chats
+    const chatListWithUnread = chats.map((chat: any) => {
+      const latestMessage = chat.messages[0];
+      return {
+        ...chat.toJSON(),
+        unreadCount: unreadCountMap.get(chat.id) || 0,
+        lastMessageTime: latestMessage?.created || chat.created,
+      };
+    });
 
     // 📅 Sort by latest message time
     chatListWithUnread.sort(
-      (a, b) =>
+      (a: any, b: any) =>
         new Date(b.lastMessageTime).getTime() - new Date(a.lastMessageTime).getTime()
     );
 

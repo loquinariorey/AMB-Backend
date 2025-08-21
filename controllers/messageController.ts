@@ -226,11 +226,18 @@ const sendMessage = async (req: any, res: any, next: any) => {
     // Determine sender type (0 for job seeker, 1 for employer)
     const sender = role === 'jobSeeker' ? 0 : 1;
     
-    // Get the highest message number in this chat
-    const lastMessage = await ChatBody.findOne({
-      where: { chat_id: chatId },
-      order: [['no', 'DESC']]
-    });
+    // ✅ Get the highest message number with timeout protection
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Database query timeout')), 10000)
+    );
+
+    const lastMessage = await Promise.race([
+      ChatBody.findOne({
+        where: { chat_id: chatId },
+        order: [['no', 'DESC']]
+      }),
+      timeoutPromise
+    ]);
     
     const nextMessageNumber = lastMessage ? lastMessage.no + 1 : 1;
     

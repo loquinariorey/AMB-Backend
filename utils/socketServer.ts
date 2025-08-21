@@ -32,24 +32,47 @@ export const initSocketServer = (httpServer: HTTPServer) => {
     socket.on('message', async (data) => {
       const { chat_id, sender, body, file_path = '', file_name = '', notifyTo } = data;
       try {
-        const newMessage = await ChatBody.create({
-          chat_id,
-          sender,
-          body,
-          is_readed: 0,
-          mail_send: 0,
-          chat_flg: 0,
-          file_path,
-          file_name,
-          deleted: null, // Soft delete field
-        });
+        // ✅ Input validation
+        if (!chat_id || sender === undefined || !body || body.trim().length === 0) {
+          socket.emit('errorMessage', 'Missing required fields: chat_id, sender, or body');
+          return;
+        }
+
+        if (body.length > 2000) {
+          socket.emit('errorMessage', 'Message too long (max 2000 characters)');
+          return;
+        }
+
+        // ✅ Add timeout protection for database operations
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Database operation timeout')), 10000)
+        );
+
+        const newMessage = await Promise.race([
+          ChatBody.create({
+            chat_id,
+            sender,
+            body: body.trim(),
+            is_readed: 0,
+            mail_send: 0,
+            chat_flg: 0,
+            file_path,
+            file_name,
+            deleted: null, // Soft delete field
+          }),
+          timeoutPromise
+        ]);
+
         io.to(`chat_${chat_id}`).emit('newMessage', newMessage);
         io.to(`${notifyTo}`).emit('newMessage', newMessage);
 
-        console.log(`📩 Message sent to chat_${chat_id}:`, body);
-      } catch (err) {
+        console.log(`📩 Message sent to chat_${chat_id}:`, body.substring(0, 50) + (body.length > 50 ? '...' : ''));
+      } catch (err: any) {
         console.error('❌ Message save failed:', err);
-        socket.emit('errorMessage', 'Failed to send message');
+        const errorMsg = err?.message === 'Database operation timeout' 
+          ? 'Message sending timed out. Please try again.' 
+          : 'Failed to send message';
+        socket.emit('errorMessage', errorMsg);
       }
     });
 
@@ -57,12 +80,35 @@ export const initSocketServer = (httpServer: HTTPServer) => {
     socket.on('editMessage', async (data) => {
       const { messageId, newBody, notifyTo } = data;
       try {
-        const message = await ChatBody.findByPk(messageId);
-        if (!message || message.deleted) return;
+        // ✅ Input validation
+        if (!messageId || !newBody || newBody.trim().length === 0) {
+          socket.emit('errorMessage', 'Missing required fields: messageId or newBody');
+          return;
+        }
 
-        message.body = newBody;
+        if (newBody.length > 2000) {
+          socket.emit('errorMessage', 'Message too long (max 2000 characters)');
+          return;
+        }
+
+        // ✅ Add timeout protection
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Database operation timeout')), 10000)
+        );
+
+        const message = await Promise.race([
+          ChatBody.findByPk(messageId),
+          timeoutPromise
+        ]);
+
+        if (!message || message.deleted) {
+          socket.emit('errorMessage', 'Message not found or already deleted');
+          return;
+        }
+
+        message.body = newBody.trim();
         message.modified = new Date();
-        await message.save();
+        await Promise.race([message.save(), timeoutPromise]);
 
         io.to(`chat_${message.chat_id}`).emit('messageUpdated', {
           id: message.id,
@@ -71,9 +117,12 @@ export const initSocketServer = (httpServer: HTTPServer) => {
         });
         io.to(`${notifyTo}`).emit('newMessage', { type: "updateMessage" });
         console.log(`✏️ Message updated in chat_${message.chat_id}`);
-      } catch (err) {
+      } catch (err: any) {
         console.error('❌ Edit failed:', err);
-        socket.emit('errorMessage', 'Failed to edit message');
+        const errorMsg = err?.message === 'Database operation timeout' 
+          ? 'Edit operation timed out. Please try again.' 
+          : 'Failed to edit message';
+        socket.emit('errorMessage', errorMsg);
       }
     });
 
@@ -81,11 +130,29 @@ export const initSocketServer = (httpServer: HTTPServer) => {
     socket.on('deleteMessage', async (data) => {
       const { messageId, notifyTo } = data;
       try {
-        const message = await ChatBody.findByPk(messageId);
-        if (!message || message.deleted) return;
+        // ✅ Input validation
+        if (!messageId) {
+          socket.emit('errorMessage', 'Missing required field: messageId');
+          return;
+        }
+
+        // ✅ Add timeout protection
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Database operation timeout')), 10000)
+        );
+
+        const message = await Promise.race([
+          ChatBody.findByPk(messageId),
+          timeoutPromise
+        ]);
+
+        if (!message || message.deleted) {
+          socket.emit('errorMessage', 'Message not found or already deleted');
+          return;
+        }
 
         message.deleted = new Date(); // Soft delete
-        await message.save();
+        await Promise.race([message.save(), timeoutPromise]);
 
         io.to(`chat_${message.chat_id}`).emit('messageDeleted', {
           id: message.id,
@@ -95,9 +162,12 @@ export const initSocketServer = (httpServer: HTTPServer) => {
         io.to(`${notifyTo}`).emit('newMessage', { type: "deleteMessage" });
 
         console.log(`🗑️ Message soft-deleted in chat_${message.chat_id}`);
-      } catch (err) {
+      } catch (err: any) {
         console.error('❌ Delete failed:', err);
-        socket.emit('errorMessage', 'Failed to delete message');
+        const errorMsg = err?.message === 'Database operation timeout' 
+          ? 'Delete operation timed out. Please try again.' 
+          : 'Failed to delete message';
+        socket.emit('errorMessage', errorMsg);
       }
     });
 
