@@ -214,7 +214,17 @@ const getAllJobs = async (req, res, next) => {
                 attributes: ['job_info_id', 'search_count', 'recruits_count', 'view_count', 'favourite_count'],
                 raw: true
             });
-            // Create lookup map for analytics data (now includes all 4 metrics)
+            // Get closest_station data for ALL filtered jobs (recruiting_criteria_id = 15)
+            const allClosestStationData = await JobInfosRecruitingCriteria.findAll({
+                where: {
+                    job_info_id: { [sequelize_1.Op.in]: allJobIds },
+                    recruiting_criteria_id: 15, // closest_station
+                    public_status: 1
+                },
+                attributes: ['job_info_id', 'body'],
+                raw: true
+            });
+            // Create lookup maps
             const analyticsMap = new Map();
             analyticsData.forEach((item) => {
                 const jobId = item.job_info_id;
@@ -224,6 +234,10 @@ const getAllJobs = async (req, res, next) => {
                     view_count: Number(item.view_count || 0),
                     favourite_count: Number(item.favourite_count || 0)
                 });
+            });
+            const allClosestStationMap = new Map();
+            allClosestStationData.forEach((station) => {
+                allClosestStationMap.set(station.job_info_id, station.body);
             });
             // Calculate scores for ALL filtered jobs and find top 5
             const allJobsWithScores = allFilteredJobs.map((job) => {
@@ -237,12 +251,15 @@ const getAllJobs = async (req, res, next) => {
                 // Calculate recommend_score: recruits*6 + favourite*3 + view*1
                 // search_count = impressions in search results, view_count = actual detail page views
                 const recommend_score = analytics.recruits_count * 6 + analytics.favourite_count * 3 + analytics.view_count * 1;
+                // Get closest_station from the lookup map
+                const closestStation = allClosestStationMap.get(jobId) || null;
                 return {
                     ...job.get(),
                     search_count: analytics.search_count,
                     recruits_count: analytics.recruits_count,
                     view_count: analytics.view_count,
                     favourite_count: analytics.favourite_count,
+                    closest_station: closestStation,
                     recommend_score,
                 };
             });
@@ -262,12 +279,26 @@ const getAllJobs = async (req, res, next) => {
                 attributes: ['job_info_id', 'search_count', 'recruits_count', 'view_count', 'favourite_count'],
                 raw: true
             });
-            // Create lookup map for current page analytics
+            // Get closest_station data for current page jobs (recruiting_criteria_id = 15)
+            const closestStationData = await JobInfosRecruitingCriteria.findAll({
+                where: {
+                    job_info_id: { [sequelize_1.Op.in]: currentPageJobIds },
+                    recruiting_criteria_id: 15, // closest_station
+                    public_status: 1
+                },
+                attributes: ['job_info_id', 'body'],
+                raw: true
+            });
+            // Create lookup maps
             const currentPageAnalyticsMap = new Map();
             currentPageAnalytics.forEach((analytics) => {
                 currentPageAnalyticsMap.set(analytics.job_info_id, analytics);
             });
-            // Add analytics fields to each job
+            const closestStationMap = new Map();
+            closestStationData.forEach((station) => {
+                closestStationMap.set(station.job_info_id, station.body);
+            });
+            // Add analytics fields and closest_station to each job
             jobsWithAnalytics = jobsWithAnalytics.map((job) => {
                 const analytics = currentPageAnalyticsMap.get(job.id) || {
                     search_count: 0,
@@ -275,12 +306,14 @@ const getAllJobs = async (req, res, next) => {
                     view_count: 0,
                     favourite_count: 0
                 };
+                const closestStation = closestStationMap.get(job.id) || null;
                 return {
                     ...job,
                     search_count: Number(analytics.search_count || 0),
                     recruits_count: Number(analytics.recruits_count || 0),
                     view_count: Number(analytics.view_count || 0),
-                    favourite_count: Number(analytics.favourite_count || 0)
+                    favourite_count: Number(analytics.favourite_count || 0),
+                    closest_station: closestStation
                 };
             });
             logger.info(`Added analytics data to ${jobsWithAnalytics.length} jobs in current page`);
@@ -346,7 +379,7 @@ const getAllJobs = async (req, res, next) => {
                 },
                 performance: {
                     executionTime: totalTime,
-                    queriesExecuted: String(recommend) === "1" ? 4 : 3, // Count query + Jobs query + Analytics update + (All filtered jobs + Analytics queries if recommend enabled)
+                    queriesExecuted: String(recommend) === "1" ? 6 : 4, // Count query + Jobs query + Analytics query + Closest station query + (All filtered jobs + All analytics + All closest station queries if recommend enabled)
                 }
             },
         });
@@ -806,7 +839,15 @@ const updateJob = async (req, res, next) => {
                 }
             }
         }
-        // Save job thumbnail image (posting_category = 11)
+        // ________________________ UPDATE JOB THUMBNAIL _______________________
+        // Clean up old thumbnail images first
+        await ImagePath.destroy({
+            where: {
+                parent_id: job.id,
+                posting_category: 11 // Thumbnail images
+            }
+        });
+        // Save new job thumbnail image (posting_category = 11)
         if (req.files?.thumbnail && req.files.thumbnail.length > 0) {
             const file = req.files.thumbnail[0];
             const imageName = file.key.replace(/^recruit\//, '');
@@ -829,6 +870,20 @@ const updateJob = async (req, res, next) => {
         // ___________UPDATE STAFF_INFO and WORKPLACE_____________________________________
         const staffInfos = typeof req.body.staffInfos === "string" ? JSON.parse(req.body.staffInfos) : req.body.staffInfos;
         const workplaceIntroductions = typeof req.body.workplaceIntroductions === "string" ? JSON.parse(req.body.workplaceIntroductions) : req.body.workplaceIntroductions;
+        // Clean up old staff info images first
+        const oldStaffInfos = await JobInfoStaffInfo.findAll({
+            where: { job_info_id: job.id },
+            attributes: ['id']
+        });
+        const oldStaffInfoIds = oldStaffInfos.map((staff) => staff.id);
+        if (oldStaffInfoIds.length > 0) {
+            await ImagePath.destroy({
+                where: {
+                    parent_id: { [sequelize_1.Op.in]: oldStaffInfoIds },
+                    posting_category: 14 // Staff images
+                }
+            });
+        }
         await JobInfoStaffInfo.destroy({ where: { job_info_id: job.id } }); // Clear old ones first
         let fileindex = 0;
         let stringindex = 0;
@@ -859,6 +914,20 @@ const updateJob = async (req, res, next) => {
                 });
                 stringindex++;
             }
+        }
+        // Clean up old workplace introduction images first
+        const oldWorkplaceInfos = await JobInfoWorkplaceIntroduction.findAll({
+            where: { job_info_id: job.id },
+            attributes: ['id']
+        });
+        const oldWorkplaceInfoIds = oldWorkplaceInfos.map((workplace) => workplace.id);
+        if (oldWorkplaceInfoIds.length > 0) {
+            await ImagePath.destroy({
+                where: {
+                    parent_id: { [sequelize_1.Op.in]: oldWorkplaceInfoIds },
+                    posting_category: 13 // Workplace images
+                }
+            });
         }
         await JobInfoWorkplaceIntroduction.destroy({ where: { job_info_id: job.id } });
         fileindex = 0;

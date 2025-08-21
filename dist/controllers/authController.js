@@ -410,6 +410,13 @@ const updateJobSeeker = async (req, res, next) => {
         await jobSeeker.save();
         // 🔹 Upload avatar if present
         if (req.file) {
+            // Clean up old avatar first to prevent duplicates
+            await ImagePath.destroy({
+                where: {
+                    parent_id: jobSeekerId,
+                    posting_category: 1 // JobSeeker Avatar
+                }
+            });
             const imageName = req.file.key.replace(/^recruit\//, '');
             await ImagePath.create({
                 image_name: imageName,
@@ -459,6 +466,13 @@ const updateEmployer = async (req, res, next) => {
         await employer.save();
         // 🔹 Upload avatar if present
         if (req.file) {
+            // Clean up old avatar first to prevent duplicates
+            await ImagePath.destroy({
+                where: {
+                    parent_id: employerId,
+                    posting_category: 2 // Employer Avatar
+                }
+            });
             const imageName = req.file.key.replace(/^recruit\//, '');
             await ImagePath.create({
                 image_name: imageName,
