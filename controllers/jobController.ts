@@ -265,9 +265,18 @@ const getAllJobs = async (req: any, res: any, next: any) => {
         raw: true
       });
 
+      // Get closest_station data for ALL filtered jobs (recruiting_criteria_id = 15)
+      const allClosestStationData = await JobInfosRecruitingCriteria.findAll({
+        where: { 
+          job_info_id: { [Op.in]: allJobIds },
+          recruiting_criteria_id: 15,  // closest_station
+          public_status: 1
+        },
+        attributes: ['job_info_id', 'body'],
+        raw: true
+      });
 
-
-      // Create lookup map for analytics data (now includes all 4 metrics)
+      // Create lookup maps
       const analyticsMap = new Map();
       analyticsData.forEach((item: any) => {
         const jobId = item.job_info_id;
@@ -277,6 +286,11 @@ const getAllJobs = async (req: any, res: any, next: any) => {
           view_count: Number(item.view_count || 0),
           favourite_count: Number(item.favourite_count || 0)
         });
+      });
+
+      const allClosestStationMap = new Map();
+      allClosestStationData.forEach((station: any) => {
+        allClosestStationMap.set(station.job_info_id, station.body);
       });
 
       // Calculate scores for ALL filtered jobs and find top 5
@@ -293,12 +307,16 @@ const getAllJobs = async (req: any, res: any, next: any) => {
         // search_count = impressions in search results, view_count = actual detail page views
         const recommend_score = analytics.recruits_count * 6 + analytics.favourite_count * 3 + analytics.view_count * 1;
 
+        // Get closest_station from the lookup map
+        const closestStation = allClosestStationMap.get(jobId) || null;
+
         return {
           ...job.get(),
           search_count: analytics.search_count,
           recruits_count: analytics.recruits_count,
           view_count: analytics.view_count,
           favourite_count: analytics.favourite_count,
+          closest_station: closestStation,
           recommend_score,
         };
       });
@@ -324,13 +342,29 @@ const getAllJobs = async (req: any, res: any, next: any) => {
         raw: true
       });
       
-      // Create lookup map for current page analytics
+      // Get closest_station data for current page jobs (recruiting_criteria_id = 15)
+      const closestStationData = await JobInfosRecruitingCriteria.findAll({
+        where: { 
+          job_info_id: { [Op.in]: currentPageJobIds },
+          recruiting_criteria_id: 15,  // closest_station
+          public_status: 1
+        },
+        attributes: ['job_info_id', 'body'],
+        raw: true
+      });
+      
+      // Create lookup maps
       const currentPageAnalyticsMap = new Map();
       currentPageAnalytics.forEach((analytics: any) => {
         currentPageAnalyticsMap.set(analytics.job_info_id, analytics);
       });
       
-      // Add analytics fields to each job
+      const closestStationMap = new Map();
+      closestStationData.forEach((station: any) => {
+        closestStationMap.set(station.job_info_id, station.body);
+      });
+      
+      // Add analytics fields and closest_station to each job
       jobsWithAnalytics = jobsWithAnalytics.map((job: any) => {
         const analytics = currentPageAnalyticsMap.get(job.id) || {
           search_count: 0,
@@ -339,12 +373,15 @@ const getAllJobs = async (req: any, res: any, next: any) => {
           favourite_count: 0
         };
         
+        const closestStation = closestStationMap.get(job.id) || null;
+        
         return {
           ...job,
           search_count: Number(analytics.search_count || 0),
           recruits_count: Number(analytics.recruits_count || 0),
           view_count: Number(analytics.view_count || 0),
-          favourite_count: Number(analytics.favourite_count || 0)
+          favourite_count: Number(analytics.favourite_count || 0),
+          closest_station: closestStation
         };
       });
       
@@ -416,7 +453,7 @@ const getAllJobs = async (req: any, res: any, next: any) => {
         },
         performance: {
           executionTime: totalTime,
-          queriesExecuted: String(recommend) === "1" ? 4 : 3, // Count query + Jobs query + Analytics update + (All filtered jobs + Analytics queries if recommend enabled)
+          queriesExecuted: String(recommend) === "1" ? 6 : 4, // Count query + Jobs query + Analytics query + Closest station query + (All filtered jobs + All analytics + All closest station queries if recommend enabled)
         }
       },
     });
