@@ -293,14 +293,25 @@ const updateInterviewItem = async (req: any, res: any, next: any) => {
       content,
     });
 
-    // 💾 Step 4: Save content images in image_paths
-    for (const img of uploadedImages) {
-      await ImagePath.create({
-        image_name: img.key,
-        entity_path: img.url,
-        posting_category: 22, // content image
-        parent_id: interviewItem.id,
+    // 💾 Step 4: Clean up old content images and save new ones
+    if (uploadedImages.length > 0) {
+      // Remove old content images first to prevent duplicates
+      await ImagePath.destroy({
+        where: { 
+          parent_id: interviewItem.id,
+          posting_category: 22  // Content images
+        }
       });
+
+      // Create new content images
+      for (const img of uploadedImages) {
+        await ImagePath.create({
+          image_name: img.key,
+          entity_path: img.url,
+          posting_category: 22, // content image
+          parent_id: interviewItem.id,
+        });
+      }
     }
 
     res.status(200).json({
@@ -325,6 +336,15 @@ const deleteInterviewItem = async (req: any, res: any, next: any) => {
     if (!InterviewItem) {
       throw new NotFoundError('Interview item not found');
     }
+
+    // Clean up associated images before deleting the interview
+    await ImagePath.destroy({
+      where: { 
+        parent_id: id,
+        posting_category: { [Op.in]: [21, 22] }  // Thumbnails (21) and Content images (22)
+      }
+    });
+
     await InterviewItem.destroy();
 
     res.status(200).json({
