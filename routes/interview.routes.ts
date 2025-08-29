@@ -7,14 +7,20 @@ import validationMiddleware from '../middleware/validationMiddleware';
 const { idParamValidation, columnValidation } = validationMiddleware;
 import memoryUpload from "../utils/upload_memory";
 
-// All routes require admin authentication
-// router.get('/', interviewController.getAllColumns);
+// Public routes (no authentication required)
 router.get('/', interviewController.getAllInterviewsPagination);
 router.get('/recommended', interviewController.getRecommened);
+
+// 👨‍💼 Admin endpoint (must be before /:id route to avoid conflicts)
+router.get('/admin', verifyToken, isAdmin, interviewController.getAllInterviewsAdmin);
+
+// Public detail route 
 router.get('/:id', idParamValidation, interviewController.getInterviewItemById);
 
+// Admin routes (authentication required)
 router.use(verifyToken);
 router.use(isAdmin);
+
 router.post('/', 
     memoryUpload.fields([
         { name: "thumbnail", maxCount: 1 },

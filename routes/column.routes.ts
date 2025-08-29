@@ -7,14 +7,21 @@ import validationMiddleware from '../middleware/validationMiddleware';
 const { idParamValidation, columnValidation } = validationMiddleware;
 import memoryUpload from "../utils/upload_memory";
 
-// All routes require admin authentication
-// router.get('/', columnController.getAllColumns);
+// Public routes (no authentication required)
 router.get('/', columnController.getAllColumnsPagination);
 router.get('/recommended', columnController.getRecommened);
-router.get('/:id', idParamValidation, columnController.getColumnItemById);
 
+// 👨‍💼 Admin endpoint (must be before /:id route to avoid conflicts)
+router.get('/admin', verifyToken, isAdmin, columnController.getAllColumnsAdmin);
+router.get('/admin/:id', verifyToken, isAdmin, columnController.getColumnItemByIdAdmin);
+
+// Public detail route (supports numeric id or string custom_id)
+router.get('/:id', columnController.getColumnItemById);
+
+// Admin routes (authentication required)
 router.use(verifyToken);
 router.use(isAdmin);
+
 router.post('/', 
     memoryUpload.fields([
         { name: "thumbnail", maxCount: 1 },

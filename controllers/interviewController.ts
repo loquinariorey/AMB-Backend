@@ -1,7 +1,7 @@
 import { Op, Sequelize } from 'sequelize';
 import db from '../models';
 
-const { Interview, ImagePath } = db;
+const { Interview, ImagePath, Column } = db;
 import errorTypes from '../utils/errorTypes';
 const { NotFoundError, BadRequestError, ForbiddenError } = errorTypes;
 import { uploadToS3, parseAndReplaceImagesInHTML } from '../utils/imageHandler';
@@ -37,7 +37,9 @@ const getAllInterviewsPagination = async (req: any, res: any, next: any) => {
 
     const offset = (page - 1) * limit;
 
-    const whereCondition: any = {};
+    const whereCondition: any = {
+      is_published: true // 👁️ Only show published articles for frontend
+    };
     if (category) {
       whereCondition['category'] = category;
     }
@@ -74,6 +76,9 @@ const getAllInterviewsPagination = async (req: any, res: any, next: any) => {
 
     // ✅ Get 3 recommended jobs sorted by custom score
     const recommended = await Interview.findAll({
+      where: {
+        is_published: true // 👁️ Only recommend published articles
+      },
       limit: 3,
       order: [
         [
@@ -152,9 +157,18 @@ const getInterviewItemById = async (req: any, res: any, next: any) => {
   try {
     const { id } = req.params;
 
-    await Interview.increment('view_cnt', { where: { id } });
+    // 🔍 Determine if id is numeric (regular id) or string (custom_id)
+    let whereCondition;
+    if (isNaN(Number(id))) {
+      // Non-numeric = custom_id lookup
+      whereCondition = { custom_id: id, is_published: true };
+    } else {
+      // Numeric = regular id lookup
+      whereCondition = { id: parseInt(id), is_published: true };
+    }
 
-    const InterviewItem = await Interview.findByPk(id, {
+    const InterviewItem = await Interview.findOne({
+      where: whereCondition,
       include: [
         {
           model: ImagePath,
@@ -170,9 +184,86 @@ const getInterviewItemById = async (req: any, res: any, next: any) => {
       throw new NotFoundError('Interview item not found');
     }
 
+    // 📈 Increment view count using the actual database id
+    await Interview.increment('view_cnt', { where: { id: InterviewItem.id } });
+
     res.status(200).json({
       success: true,
       data: InterviewItem
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get all interviews for admin (includes unpublished)
+ * @route GET /api/Interview-items/admin
+ */
+const getAllInterviewsAdmin = async (req: any, res: any, next: any) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      searchTerm,
+      category,
+      is_published
+    } = req.query;
+
+    const offset = (page - 1) * limit;
+
+    const whereCondition: any = {};
+    
+    // 🔍 Filter by publication status if specified
+    if (is_published !== undefined) {
+      whereCondition.is_published = is_published === 'true';
+    }
+    
+    if (category) {
+      whereCondition['category'] = category;
+    }
+    if (searchTerm) {
+      whereCondition[Op.or] = [
+        { title: { [Op.like]: `%${searchTerm}%` } },
+        { custom_id: { [Op.like]: `%${searchTerm}%` } },
+      ];
+    }
+
+    const { count, rows: InterviewItems } = await Interview.findAndCountAll({
+      where: whereCondition,
+      limit: parseInt(limit, 10),
+      offset: offset,
+      order: [['created', 'DESC']], // 📅 Show newest first for admin
+      include: [
+        {
+          model: ImagePath,
+          as: 'thumbnail',
+          required: false,
+          where: { posting_category: 21 },
+          attributes: ['entity_path'],
+        },
+      ],
+    });
+
+    const totalPages = Math.ceil(count / limit);
+
+    // ✅ Admin response with publication status visible
+    res.status(200).json({
+      success: true,
+      data: {
+        articles: InterviewItems,
+        pagination: {
+          total: count,
+          page: parseInt(page, 10),
+          limit: parseInt(limit, 10),
+          totalPages,
+        },
+        filters: {
+          category,
+          searchTerm,
+          is_published
+        }
+      },
     });
   } catch (error) {
     next(error);
@@ -185,8 +276,25 @@ const getInterviewItemById = async (req: any, res: any, next: any) => {
  */
 const createInterviewItem = async (req: any, res: any, next: any) => {
   try {
-    const { title, category, tag } = req.body;
+    console.log('📝 CREATE INTERVIEW - Request body:', req.body);
+    console.log('📝 CREATE INTERVIEW - is_published value:', req.body.is_published, 'type:', typeof req.body.is_published);
+    
+    const { title, category, tag, custom_id, is_published } = req.body;
     let content = req.body.content || '';
+
+    // 🔍 Validate custom_id uniqueness across both columns and interviews
+    if (custom_id) {
+      const existingInterview = await Interview.findOne({ where: { custom_id } });
+      if (existingInterview) {
+        throw new BadRequestError(`Custom ID '${custom_id}' already exists in interviews`);
+      }
+      
+      // Check columns table as well
+      const existingColumn = await Column.findOne({ where: { custom_id } });
+      if (existingColumn) {
+        throw new BadRequestError(`Custom ID '${custom_id}' already exists in columns`);
+      }
+    }
 
     // Step 1: Handle thumbnail upload
     let thumbnailImageName = '';
@@ -207,13 +315,27 @@ const createInterviewItem = async (req: any, res: any, next: any) => {
     const { updatedHTML, uploadedImages } = await parseAndReplaceImagesInHTML(content);
     content = updatedHTML;
 
+    // 📊 Parse is_published properly (handle string/boolean/undefined)
+    let publishedStatus = false; // Default to draft
+    if (is_published !== undefined) {
+      // Handle various frontend formats: true, "true", "1", false, "false", "0"
+      if (typeof is_published === 'string') {
+        publishedStatus = is_published.toLowerCase() === 'true' || is_published === '1';
+      } else {
+        publishedStatus = Boolean(is_published);
+      }
+    }
+    
+    console.log('📝 CREATE INTERVIEW - Final is_published value:', publishedStatus);
+
     // Step 3: Create article
     const interview = await Interview.create({
       title,
       category,
       tag,
-      // thumbnail_image: thumbnailImageName,
       content,
+      custom_id: custom_id || null, // 🆔 Optional custom ID
+      is_published: publishedStatus, // 👁️ Publication status
     });
 
     // Step 4: Update parent_id in image_paths
@@ -245,12 +367,34 @@ const createInterviewItem = async (req: any, res: any, next: any) => {
 const updateInterviewItem = async (req: any, res: any, next: any) => {
   try {
     const { id } = req.params;
-    const { title, category } = req.body;
+    console.log('📝 UPDATE INTERVIEW - Request body:', req.body);
+    console.log('📝 UPDATE INTERVIEW - is_published value:', req.body.is_published, 'type:', typeof req.body.is_published);
+    
+    const { title, category, custom_id, is_published } = req.body;
     let content = req.body.content || '';
 
     const interviewItem = await Interview.findByPk(id);
     if (!interviewItem) {
       throw new NotFoundError('Interview item not found');
+    }
+
+    // 🔍 Validate custom_id uniqueness if it's being changed
+    if (custom_id && custom_id !== interviewItem.custom_id) {
+      const existingInterview = await Interview.findOne({ 
+        where: { 
+          custom_id,
+          id: { [Op.ne]: id } // Exclude current record
+        } 
+      });
+      if (existingInterview) {
+        throw new BadRequestError(`Custom ID '${custom_id}' already exists in interviews`);
+      }
+      
+      // Check columns table as well
+      const existingColumn = await Column.findOne({ where: { custom_id } });
+      if (existingColumn) {
+        throw new BadRequestError(`Custom ID '${custom_id}' already exists in columns`);
+      }
     }
 
     // 🖼️ Step 1: If new thumbnail uploaded
@@ -286,11 +430,27 @@ const updateInterviewItem = async (req: any, res: any, next: any) => {
     const { updatedHTML, uploadedImages } = await parseAndReplaceImagesInHTML(content);
     content = updatedHTML;
 
+    // 📊 Parse is_published properly for update
+    let publishedStatus = interviewItem.is_published; // Default to existing value
+    if (is_published !== undefined) {
+      // Handle various frontend formats: true, "true", "1", false, "false", "0"
+      if (typeof is_published === 'string') {
+        publishedStatus = is_published.toLowerCase() === 'true' || is_published === '1';
+      } else {
+        publishedStatus = Boolean(is_published);
+      }
+    }
+    
+    console.log('📝 UPDATE INTERVIEW - Current is_published:', interviewItem.is_published);
+    console.log('📝 UPDATE INTERVIEW - Final is_published value:', publishedStatus);
+
     // 📝 Step 3: Update Interview fields
     await interviewItem.update({
       title,
       category,
       content,
+      custom_id: custom_id || null, // 🆔 Optional custom ID
+      is_published: publishedStatus, // 👁️ Publication status
     });
 
     // 💾 Step 4: Clean up old content images and save new ones
@@ -359,6 +519,7 @@ const deleteInterviewItem = async (req: any, res: any, next: any) => {
 export default {
   getAllInterviews,
   getAllInterviewsPagination,
+  getAllInterviewsAdmin,
   getRecommened,
   getInterviewItemById,
   createInterviewItem,
