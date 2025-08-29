@@ -27,10 +27,9 @@
 }
 ```
 
-#### GET `/api/columns/123` or `/api/columns/SPECIAL-001`
-**✅ Both work now!**
-- `/api/columns/123` - original numeric ID
-- `/api/columns/SPECIAL-001` - new custom ID
+#### GET `/api/columns/10001`
+**✅ Uses numeric custom_id now**
+- Public detail uses `custom_id` (number) only
 
 ---
 
@@ -80,7 +79,7 @@ const articleUrl = `/articles/${article.custom_id || article.id}`;
 ### 2. Admin Forms (Add 2 Fields)
 ```html
 <!-- Add to create/edit forms -->
-<input name="custom_id" placeholder="Custom ID (optional)" />
+<input name="custom_id" type="number" placeholder="Custom ID (required, number)" required />
 <input type="checkbox" name="is_published" checked /> Publish
 ```
 

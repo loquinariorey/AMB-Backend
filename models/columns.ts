@@ -35,10 +35,10 @@ export default (sequelize: any, DataTypes: any) => {
             comment: 'favourite_cnt'
         },
         custom_id: {
-            type: DataTypes.STRING(50),
-            allowNull: true,
+            type: DataTypes.INTEGER,
+            allowNull: false,
             unique: true,
-            comment: 'Custom article ID set by admin (optional)'
+            comment: 'Numeric custom article ID set by admin (required)'
         },
         is_published: {
             type: DataTypes.BOOLEAN,

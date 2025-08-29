@@ -44,8 +44,10 @@ const getAllColumnsPagination = async (req: any, res: any, next: any) => {
       whereCondition['category'] = category;
     }
     if (searchTerm) {
+      const numericSearch = /^\d+$/.test(String(searchTerm)) ? parseInt(String(searchTerm), 10) : null;
       whereCondition[Op.or] = [
         { title: { [Op.like]: `%${searchTerm}%` } },
+        ...(numericSearch !== null ? [{ custom_id: numericSearch }] : [])
       ];
     }
 
@@ -157,8 +159,14 @@ const getColumnItemById = async (req: any, res: any, next: any) => {
   try {
     const { id } = req.params;
 
-    // 🔍 Treat the route param strictly as custom_id
-    const whereCondition = { custom_id: id, is_published: true };
+    // 🔢 Enforce numeric custom_id
+    if (!/^\d+$/.test(String(id))) {
+      throw new BadRequestError('custom_id must be a number');
+    }
+    const customId = parseInt(String(id), 10);
+
+    // 🔍 Lookup by numeric custom_id
+    const whereCondition = { custom_id: customId, is_published: true };
 
     const ColumnItem = await Column.findOne({
       where: whereCondition,
@@ -262,9 +270,10 @@ const getAllColumnsAdmin = async (req: any, res: any, next: any) => {
       whereCondition['category'] = category;
     }
     if (searchTerm) {
+      const numericSearch = /^\d+$/.test(String(searchTerm)) ? parseInt(String(searchTerm), 10) : null;
       whereCondition[Op.or] = [
         { title: { [Op.like]: `%${searchTerm}%` } },
-        { custom_id: { [Op.like]: `%${searchTerm}%` } },
+        ...(numericSearch !== null ? [{ custom_id: numericSearch }] : [])
       ];
     }
 
@@ -321,19 +330,23 @@ const createColumnItem = async (req: any, res: any, next: any) => {
     const { title, category, custom_id, is_published } = req.body;
     let content = req.body.content || '';
 
-    // ✅ Require custom_id and validate format
-    if (!custom_id || (typeof custom_id === 'string' && custom_id.trim() === '')) {
+    // ✅ Require custom_id and validate numeric format
+    if (custom_id === undefined || custom_id === null || String(custom_id).trim() === '') {
       throw new BadRequestError('custom_id is required');
     }
+    if (!/^\d+$/.test(String(custom_id))) {
+      throw new BadRequestError('custom_id must be a number');
+    }
+    const numericCustomId = parseInt(String(custom_id), 10);
 
     // 🔍 Validate custom_id uniqueness across both columns and interviews
-    const existingColumn = await Column.findOne({ where: { custom_id } });
+    const existingColumn = await Column.findOne({ where: { custom_id: numericCustomId } });
     if (existingColumn) {
       throw new BadRequestError(`Custom ID '${custom_id}' already exists in columns`);
     }
     
     // Check interviews table as well
-    const existingInterview = await Interview.findOne({ where: { custom_id } });
+    const existingInterview = await Interview.findOne({ where: { custom_id: numericCustomId } });
     if (existingInterview) {
       throw new BadRequestError(`Custom ID '${custom_id}' already exists in interviews`);
     }
@@ -375,7 +388,7 @@ const createColumnItem = async (req: any, res: any, next: any) => {
       title,
       category,
       content,
-      custom_id: custom_id, // 🆔 Required custom ID
+      custom_id: numericCustomId, // 🆔 Required numeric custom ID
       is_published: publishedStatus, // 👁️ Publication status
     });
 
@@ -419,11 +432,16 @@ const updateColumnItem = async (req: any, res: any, next: any) => {
       throw new NotFoundError('Column item not found');
     }
 
-    // 🔍 Validate custom_id uniqueness if it's being changed
-    if (custom_id && custom_id !== columnItem.custom_id) {
+    // 🔍 Validate custom_id if it's being changed
+    if (custom_id !== undefined && custom_id !== null && String(custom_id) !== String(columnItem.custom_id)) {
+      if (!/^\d+$/.test(String(custom_id))) {
+        throw new BadRequestError('custom_id must be a number');
+      }
+      const numericCustomId = parseInt(String(custom_id), 10);
+
       const existingColumn = await Column.findOne({ 
         where: { 
-          custom_id,
+          custom_id: numericCustomId,
           id: { [Op.ne]: id } // Exclude current record
         } 
       });
@@ -432,7 +450,7 @@ const updateColumnItem = async (req: any, res: any, next: any) => {
       }
       
       // Check interviews table as well
-      const existingInterview = await Interview.findOne({ where: { custom_id } });
+      const existingInterview = await Interview.findOne({ where: { custom_id: numericCustomId } });
       if (existingInterview) {
         throw new BadRequestError(`Custom ID '${custom_id}' already exists in interviews`);
       }
@@ -490,7 +508,9 @@ const updateColumnItem = async (req: any, res: any, next: any) => {
       title,
       category,
       content,
-      custom_id: custom_id || null, // 🆔 Optional custom ID
+      custom_id: custom_id !== undefined && custom_id !== null && String(custom_id) !== ''
+        ? parseInt(String(custom_id), 10)
+        : columnItem.custom_id,
       is_published: publishedStatus, // 👁️ Publication status
     });
 

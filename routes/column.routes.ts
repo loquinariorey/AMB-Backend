@@ -15,8 +15,8 @@ router.get('/recommended', columnController.getRecommened);
 router.get('/admin', verifyToken, isAdmin, columnController.getAllColumnsAdmin);
 router.get('/admin/:id', verifyToken, isAdmin, columnController.getColumnItemByIdAdmin);
 
-// Public detail route (custom_id only)
-router.get('/:id', columnController.getColumnItemById);
+// Public detail route (custom_id only, must be numeric)
+router.get('/:id', idParamValidation, columnController.getColumnItemById);
 
 // Admin routes (authentication required)
 router.use(verifyToken);
