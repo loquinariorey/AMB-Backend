@@ -150,22 +150,15 @@ const getRecommened = async (req: any, res: any, next: any) => {
 };
 
 /**
- * Get Interview item by ID
+ * Get Interview item by custom_id
  * @route GET /api/Interview-items/:id
  */
 const getInterviewItemById = async (req: any, res: any, next: any) => {
   try {
     const { id } = req.params;
 
-    // 🔍 Determine if id is numeric (regular id) or string (custom_id)
-    let whereCondition;
-    if (isNaN(Number(id))) {
-      // Non-numeric = custom_id lookup
-      whereCondition = { custom_id: id, is_published: true };
-    } else {
-      // Numeric = regular id lookup
-      whereCondition = { id: parseInt(id), is_published: true };
-    }
+    // 🔍 Treat the route param strictly as custom_id for public access
+    const whereCondition = { custom_id: id, is_published: true };
 
     const InterviewItem = await Interview.findOne({
       where: whereCondition,
@@ -282,18 +275,21 @@ const createInterviewItem = async (req: any, res: any, next: any) => {
     const { title, category, tag, custom_id, is_published } = req.body;
     let content = req.body.content || '';
 
+    // ✅ Require custom_id
+    if (!custom_id || (typeof custom_id === 'string' && custom_id.trim() === '')) {
+      throw new BadRequestError('custom_id is required');
+    }
+
     // 🔍 Validate custom_id uniqueness across both columns and interviews
-    if (custom_id) {
-      const existingInterview = await Interview.findOne({ where: { custom_id } });
-      if (existingInterview) {
-        throw new BadRequestError(`Custom ID '${custom_id}' already exists in interviews`);
-      }
-      
-      // Check columns table as well
-      const existingColumn = await Column.findOne({ where: { custom_id } });
-      if (existingColumn) {
-        throw new BadRequestError(`Custom ID '${custom_id}' already exists in columns`);
-      }
+    const existingInterview = await Interview.findOne({ where: { custom_id } });
+    if (existingInterview) {
+      throw new BadRequestError(`Custom ID '${custom_id}' already exists in interviews`);
+    }
+    
+    // Check columns table as well
+    const existingColumn = await Column.findOne({ where: { custom_id } });
+    if (existingColumn) {
+      throw new BadRequestError(`Custom ID '${custom_id}' already exists in columns`);
     }
 
     // Step 1: Handle thumbnail upload
@@ -334,7 +330,7 @@ const createInterviewItem = async (req: any, res: any, next: any) => {
       category,
       tag,
       content,
-      custom_id: custom_id || null, // 🆔 Optional custom ID
+      custom_id: custom_id, // 🆔 Required custom ID
       is_published: publishedStatus, // 👁️ Publication status
     });
 
