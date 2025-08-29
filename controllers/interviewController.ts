@@ -273,6 +273,46 @@ const getAllInterviewsAdmin = async (req: any, res: any, next: any) => {
 };
 
 /**
+ * Get Interview item by custom_id (Admin - includes drafts, no view count increment)
+ * @route GET /api/Interview-items/admin/:id
+ */
+const getInterviewItemByIdAdmin = async (req: any, res: any, next: any) => {
+  try {
+    const { id } = req.params;
+
+    // Enforce numeric custom_id for admin detail
+    if (!/^\d+$/.test(String(id))) {
+      throw new BadRequestError('custom_id must be a number');
+    }
+    const customId = parseInt(String(id), 10);
+
+    const InterviewItem = await Interview.findOne({
+      where: { custom_id: customId },
+      include: [
+        {
+          model: ImagePath,
+          as: 'thumbnail',
+          required: false,
+          where: { posting_category: 21 },
+          attributes: ['entity_path'],
+        },
+      ],
+    });
+
+    if (!InterviewItem) {
+      throw new NotFoundError('Interview item not found');
+    }
+
+    res.status(200).json({
+      success: true,
+      data: InterviewItem
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Create Interview item
  * @route POST /api/Interview-items
  */
@@ -538,6 +578,7 @@ export default {
   getAllInterviewsAdmin,
   getRecommened,
   getInterviewItemById,
+  getInterviewItemByIdAdmin,
   createInterviewItem,
   updateInterviewItem,
   deleteInterviewItem

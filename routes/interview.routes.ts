@@ -13,6 +13,7 @@ router.get('/recommended', interviewController.getRecommened);
 
 // 👨‍💼 Admin endpoint (must be before /:id route to avoid conflicts)
 router.get('/admin', verifyToken, isAdmin, interviewController.getAllInterviewsAdmin);
+router.get('/admin/:id', verifyToken, isAdmin, idParamValidation, interviewController.getInterviewItemByIdAdmin);
 
 // Public detail route (custom_id only, must be numeric)
 router.get('/:id', idParamValidation, interviewController.getInterviewItemById);

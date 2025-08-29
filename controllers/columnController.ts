@@ -198,22 +198,20 @@ const getColumnItemById = async (req: any, res: any, next: any) => {
 };
 
 /**
- * Get Column item by ID (Admin - includes drafts, no view count increment)
+ * Get Column item by custom_id (Admin - includes drafts, no view count increment)
  * @route GET /api/Column-items/admin/:id
  */
 const getColumnItemByIdAdmin = async (req: any, res: any, next: any) => {
   try {
     const { id } = req.params;
 
-    // 🔍 Determine if id is numeric (regular id) or string (custom_id)
-    let whereCondition;
-    if (isNaN(Number(id))) {
-      // Non-numeric = custom_id lookup
-      whereCondition = { custom_id: id };
-    } else {
-      // Numeric = regular id lookup
-      whereCondition = { id: parseInt(id) };
+    // 🔢 Enforce numeric custom_id for admin detail
+    if (!/^\d+$/.test(String(id))) {
+      throw new BadRequestError('custom_id must be a number');
     }
+    const customId = parseInt(String(id), 10);
+
+    const whereCondition = { custom_id: customId };
 
     const ColumnItem = await Column.findOne({
       where: whereCondition,
