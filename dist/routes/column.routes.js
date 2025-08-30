@@ -11,11 +11,15 @@ const { verifyToken, isEmployer, isJobSeeker, isAdmin } = authMiddleware_1.defau
 const validationMiddleware_1 = __importDefault(require("../middleware/validationMiddleware"));
 const { idParamValidation, columnValidation } = validationMiddleware_1.default;
 const upload_memory_1 = __importDefault(require("../utils/upload_memory"));
-// All routes require admin authentication
-// router.get('/', columnController.getAllColumns);
+// Public routes (no authentication required)
 router.get('/', columnController_1.default.getAllColumnsPagination);
 router.get('/recommended', columnController_1.default.getRecommened);
+// 👨‍💼 Admin endpoint (must be before /:id route to avoid conflicts)
+router.get('/admin', verifyToken, isAdmin, columnController_1.default.getAllColumnsAdmin);
+router.get('/admin/:id', verifyToken, isAdmin, columnController_1.default.getColumnItemByIdAdmin);
+// Public detail route (custom_id only, must be numeric)
 router.get('/:id', idParamValidation, columnController_1.default.getColumnItemById);
+// Admin routes (authentication required)
 router.use(verifyToken);
 router.use(isAdmin);
 router.post('/', upload_memory_1.default.fields([

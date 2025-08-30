@@ -5,7 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const sequelize_1 = require("sequelize");
 const models_1 = __importDefault(require("../models"));
-const { Column, ImagePath } = models_1.default;
+const { Column, ImagePath, Interview } = models_1.default;
 const errorTypes_1 = __importDefault(require("../utils/errorTypes"));
 const { NotFoundError, BadRequestError, ForbiddenError } = errorTypes_1.default;
 const imageHandler_1 = require("../utils/imageHandler");
@@ -30,13 +30,17 @@ const getAllColumnsPagination = async (req, res, next) => {
     try {
         const { page = 1, limit = 200, searchTerm, category } = req.query;
         const offset = (page - 1) * limit;
-        const whereCondition = {};
+        const whereCondition = {
+            is_published: true // 👁️ Only show published articles for frontend
+        };
         if (category) {
             whereCondition['category'] = category;
         }
         if (searchTerm) {
+            const numericSearch = /^\d+$/.test(String(searchTerm)) ? parseInt(String(searchTerm), 10) : null;
             whereCondition[sequelize_1.Op.or] = [
                 { title: { [sequelize_1.Op.like]: `%${searchTerm}%` } },
+                ...(numericSearch !== null ? [{ custom_id: numericSearch }] : [])
             ];
         }
         const { count, rows: ColumnItems } = await Column.findAndCountAll({
@@ -63,6 +67,9 @@ const getAllColumnsPagination = async (req, res, next) => {
         const totalPages = Math.ceil(count / limit);
         // ✅ Get 3 recommended jobs sorted by custom score
         const recommended = await Column.findAll({
+            where: {
+                is_published: true // 👁️ Only recommend published articles
+            },
             limit: 3,
             order: [
                 [
@@ -131,14 +138,21 @@ const getRecommened = async (req, res, next) => {
     }
 };
 /**
- * Get Column item by ID
- * @route GET /api/Column-items/:id
+ * Get Column item by custom_id
+ * @route GET /api/Column-items/:custom_id
  */
 const getColumnItemById = async (req, res, next) => {
     try {
         const { id } = req.params;
-        await Column.increment('view_cnt', { where: { id } });
-        const ColumnItem = await Column.findByPk(id, {
+        // 🔢 Enforce numeric custom_id
+        if (!/^\d+$/.test(String(id))) {
+            throw new BadRequestError('custom_id must be a number');
+        }
+        const customId = parseInt(String(id), 10);
+        // 🔍 Lookup by numeric custom_id
+        const whereCondition = { custom_id: customId, is_published: true };
+        const ColumnItem = await Column.findOne({
+            where: whereCondition,
             include: [
                 {
                     model: ImagePath,
@@ -152,9 +166,111 @@ const getColumnItemById = async (req, res, next) => {
         if (!ColumnItem) {
             throw new NotFoundError('Column item not found');
         }
+        // 📈 Increment view count using the actual database id
+        await Column.increment('view_cnt', { where: { id: ColumnItem.id } });
         res.status(200).json({
             success: true,
             data: ColumnItem
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+/**
+ * Get Column item by custom_id (Admin - includes drafts, no view count increment)
+ * @route GET /api/Column-items/admin/:id
+ */
+const getColumnItemByIdAdmin = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        // 🔢 Enforce numeric custom_id for admin detail
+        if (!/^\d+$/.test(String(id))) {
+            throw new BadRequestError('custom_id must be a number');
+        }
+        const customId = parseInt(String(id), 10);
+        const whereCondition = { custom_id: customId };
+        const ColumnItem = await Column.findOne({
+            where: whereCondition,
+            include: [
+                {
+                    model: ImagePath,
+                    as: 'thumbnail',
+                    required: false,
+                    where: { posting_category: 21 },
+                    attributes: ['entity_path'],
+                },
+            ],
+        });
+        if (!ColumnItem) {
+            throw new NotFoundError('Column item not found');
+        }
+        // 🚫 Do not increment view_cnt for admin preview
+        res.status(200).json({
+            success: true,
+            data: ColumnItem
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+/**
+ * Get all columns for admin (includes unpublished)
+ * @route GET /api/Column-items/admin
+ */
+const getAllColumnsAdmin = async (req, res, next) => {
+    try {
+        const { page = 1, limit = 20, searchTerm, category, is_published } = req.query;
+        const offset = (page - 1) * limit;
+        const whereCondition = {};
+        // 🔍 Filter by publication status if specified
+        if (is_published !== undefined) {
+            whereCondition.is_published = is_published === 'true';
+        }
+        if (category) {
+            whereCondition['category'] = category;
+        }
+        if (searchTerm) {
+            const numericSearch = /^\d+$/.test(String(searchTerm)) ? parseInt(String(searchTerm), 10) : null;
+            whereCondition[sequelize_1.Op.or] = [
+                { title: { [sequelize_1.Op.like]: `%${searchTerm}%` } },
+                ...(numericSearch !== null ? [{ custom_id: numericSearch }] : [])
+            ];
+        }
+        const { count, rows: ColumnItems } = await Column.findAndCountAll({
+            where: whereCondition,
+            limit: parseInt(limit, 10),
+            offset: offset,
+            order: [['created', 'DESC']], // 📅 Show newest first for admin
+            include: [
+                {
+                    model: ImagePath,
+                    as: 'thumbnail',
+                    required: false,
+                    where: { posting_category: 21 },
+                    attributes: ['entity_path'],
+                },
+            ],
+        });
+        const totalPages = Math.ceil(count / limit);
+        // ✅ Admin response with publication status visible
+        res.status(200).json({
+            success: true,
+            data: {
+                articles: ColumnItems,
+                pagination: {
+                    total: count,
+                    page: parseInt(page, 10),
+                    limit: parseInt(limit, 10),
+                    totalPages,
+                },
+                filters: {
+                    category,
+                    searchTerm,
+                    is_published
+                }
+            },
         });
     }
     catch (error) {
@@ -167,8 +283,28 @@ const getColumnItemById = async (req, res, next) => {
  */
 const createColumnItem = async (req, res, next) => {
     try {
-        const { title, category } = req.body;
+        console.log('📝 CREATE COLUMN - Request body:', req.body);
+        console.log('📝 CREATE COLUMN - is_published value:', req.body.is_published, 'type:', typeof req.body.is_published);
+        const { title, category, custom_id, is_published } = req.body;
         let content = req.body.content || '';
+        // ✅ Require custom_id and validate numeric format
+        if (custom_id === undefined || custom_id === null || String(custom_id).trim() === '') {
+            throw new BadRequestError('custom_id is required');
+        }
+        if (!/^\d+$/.test(String(custom_id))) {
+            throw new BadRequestError('custom_id must be a number');
+        }
+        const numericCustomId = parseInt(String(custom_id), 10);
+        // 🔍 Validate custom_id uniqueness across both columns and interviews
+        const existingColumn = await Column.findOne({ where: { custom_id: numericCustomId } });
+        if (existingColumn) {
+            throw new BadRequestError(`Custom ID '${custom_id}' already exists in columns`);
+        }
+        // Check interviews table as well
+        const existingInterview = await Interview.findOne({ where: { custom_id: numericCustomId } });
+        if (existingInterview) {
+            throw new BadRequestError(`Custom ID '${custom_id}' already exists in interviews`);
+        }
         // Step 1: Handle thumbnail upload
         let thumbnailImageName = '';
         if (req.files?.['thumbnail']?.[0]) {
@@ -185,12 +321,25 @@ const createColumnItem = async (req, res, next) => {
         // Step 2: Handle embedded TinyMCE images
         const { updatedHTML, uploadedImages } = await (0, imageHandler_1.parseAndReplaceImagesInHTML)(content);
         content = updatedHTML;
+        // 📊 Parse is_published properly (handle string/boolean/undefined)
+        let publishedStatus = false; // Default to draft
+        if (is_published !== undefined) {
+            // Handle various frontend formats: true, "true", "1", false, "false", "0"
+            if (typeof is_published === 'string') {
+                publishedStatus = is_published.toLowerCase() === 'true' || is_published === '1';
+            }
+            else {
+                publishedStatus = Boolean(is_published);
+            }
+        }
+        console.log('📝 CREATE COLUMN - Final is_published value:', publishedStatus);
         // Step 3: Create article
         const column = await Column.create({
             title,
             category,
-            // thumbnail_image: thumbnailImageName,
             content,
+            custom_id: numericCustomId, // 🆔 Required numeric custom ID
+            is_published: publishedStatus, // 👁️ Publication status
         });
         // Step 4: Update parent_id in image_paths
         if (thumbnailImageName) {
@@ -220,11 +369,34 @@ const createColumnItem = async (req, res, next) => {
 const updateColumnItem = async (req, res, next) => {
     try {
         const { id } = req.params;
-        const { title, category } = req.body;
+        console.log('📝 UPDATE COLUMN - Request body:', req.body);
+        console.log('📝 UPDATE COLUMN - is_published value:', req.body.is_published, 'type:', typeof req.body.is_published);
+        const { title, category, custom_id, is_published } = req.body;
         let content = req.body.content || '';
         const columnItem = await Column.findByPk(id);
         if (!columnItem) {
             throw new NotFoundError('Column item not found');
+        }
+        // 🔍 Validate custom_id if it's being changed
+        if (custom_id !== undefined && custom_id !== null && String(custom_id) !== String(columnItem.custom_id)) {
+            if (!/^\d+$/.test(String(custom_id))) {
+                throw new BadRequestError('custom_id must be a number');
+            }
+            const numericCustomId = parseInt(String(custom_id), 10);
+            const existingColumn = await Column.findOne({
+                where: {
+                    custom_id: numericCustomId,
+                    id: { [sequelize_1.Op.ne]: id } // Exclude current record
+                }
+            });
+            if (existingColumn) {
+                throw new BadRequestError(`Custom ID '${custom_id}' already exists in columns`);
+            }
+            // Check interviews table as well
+            const existingInterview = await Interview.findOne({ where: { custom_id: numericCustomId } });
+            if (existingInterview) {
+                throw new BadRequestError(`Custom ID '${custom_id}' already exists in interviews`);
+            }
         }
         // 🖼️ Step 1: If new thumbnail uploaded
         if (req.files?.['thumbnail']?.[0]) {
@@ -255,11 +427,28 @@ const updateColumnItem = async (req, res, next) => {
         // 🖼️ Step 2: Handle embedded TinyMCE base64 images
         const { updatedHTML, uploadedImages } = await (0, imageHandler_1.parseAndReplaceImagesInHTML)(content);
         content = updatedHTML;
+        // 📊 Parse is_published properly for update
+        let publishedStatus = columnItem.is_published; // Default to existing value
+        if (is_published !== undefined) {
+            // Handle various frontend formats: true, "true", "1", false, "false", "0"
+            if (typeof is_published === 'string') {
+                publishedStatus = is_published.toLowerCase() === 'true' || is_published === '1';
+            }
+            else {
+                publishedStatus = Boolean(is_published);
+            }
+        }
+        console.log('📝 UPDATE COLUMN - Current is_published:', columnItem.is_published);
+        console.log('📝 UPDATE COLUMN - Final is_published value:', publishedStatus);
         // 📝 Step 3: Update Column fields
         await columnItem.update({
             title,
             category,
             content,
+            custom_id: custom_id !== undefined && custom_id !== null && String(custom_id) !== ''
+                ? parseInt(String(custom_id), 10)
+                : columnItem.custom_id,
+            is_published: publishedStatus, // 👁️ Publication status
         });
         // 💾 Step 4: Clean up old content images and save new ones
         if (uploadedImages.length > 0) {
@@ -320,8 +509,10 @@ const deleteColumnItem = async (req, res, next) => {
 exports.default = {
     getAllColumns,
     getAllColumnsPagination,
+    getAllColumnsAdmin,
     getRecommened,
     getColumnItemById,
+    getColumnItemByIdAdmin,
     createColumnItem,
     updateColumnItem,
     deleteColumnItem

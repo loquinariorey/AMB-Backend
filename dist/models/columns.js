@@ -36,6 +36,18 @@ exports.default = (sequelize, DataTypes) => {
             defaultValue: 0,
             comment: 'favourite_cnt'
         },
+        custom_id: {
+            type: DataTypes.INTEGER,
+            allowNull: false,
+            unique: true,
+            comment: 'Numeric custom article ID set by admin (required)'
+        },
+        is_published: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: true,
+            comment: 'Article visibility status (true=public, false=private)'
+        },
         created: {
             type: DataTypes.DATE,
             defaultValue: DataTypes.NOW,
