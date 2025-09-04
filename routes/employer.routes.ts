@@ -17,8 +17,12 @@ router.get('/jobs', verifyToken, isEmployer, employerController.getEmployerJobs)
 // Dashboard route
 router.get('/dashboard', verifyToken, isEmployer, employerController.getEmployerDashboard);
 
-//Admin
+//Admin routes
 router.get('/', verifyToken, isAdmin, employerController.getAllEmployers);
 router.get('/infos', verifyToken, isAdmin, employerController.getAllEmployerInfos);
 router.get('/:id', verifyToken, isAdmin, employerController.getEmployerById);
+router.put('/:id', verifyToken, isAdmin, validationMiddleware.employerUpdateValidation, employerController.updateEmployerByAdmin);
+router.delete('/:id', verifyToken, isAdmin, employerController.deleteEmployerByAdmin);
+router.put('/:id/restore', verifyToken, isAdmin, employerController.restoreEmployerByAdmin);
+
 export default router;

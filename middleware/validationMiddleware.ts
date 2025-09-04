@@ -143,6 +143,22 @@ const recruitingCriteriaValidation = [
   validate,
 ];
 
+// Employer update validation (for admin)
+const employerUpdateValidation = [
+  check("clinic_name", "Company Name is required").notEmpty(),
+  check("clinic_name_kana", "Company Name(Kana) is required").notEmpty(),
+  check("zip", "ZIP code is required").notEmpty(),
+  check("zip", "Invalid Zip code format (123-4567)").matches(/^\d{3}-\d{4}$/),
+  check("tel", "Telephone number is required").notEmpty(),
+  check("email", "Email is required").notEmpty(),
+  check("email", "Invalid Email").isEmail(),
+  check("prefectures", "Prefecture is required").isInt({ min: 1, max: 47 }),
+  check("business_form", "Business form is required").isInt({ min: 1, max: 3 }),
+  check("paying_status", "Paying status must be a valid number").optional().isInt({ min: 1, max: 3 }),
+  check("status", "Status must be a valid string").optional().isIn(['active', 'inactive', 'suspended']),
+  validate,
+];
+
 export default {
   validate,
   jobSeekerRegisterValidation,
@@ -155,5 +171,6 @@ export default {
   idParamValidation,
   featureValidation,
   columnValidation,
-  recruitingCriteriaValidation
+  recruitingCriteriaValidation,
+  employerUpdateValidation
 };

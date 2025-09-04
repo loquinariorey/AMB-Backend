@@ -127,6 +127,21 @@ const recruitingCriteriaValidation = [
     (0, express_validator_1.check)("display_order", "display_order is required").notEmpty(),
     validate,
 ];
+// Employer update validation (for admin)
+const employerUpdateValidation = [
+    (0, express_validator_1.check)("clinic_name", "Company Name is required").notEmpty(),
+    (0, express_validator_1.check)("clinic_name_kana", "Company Name(Kana) is required").notEmpty(),
+    (0, express_validator_1.check)("zip", "ZIP code is required").notEmpty(),
+    (0, express_validator_1.check)("zip", "Invalid Zip code format (123-4567)").matches(/^\d{3}-\d{4}$/),
+    (0, express_validator_1.check)("tel", "Telephone number is required").notEmpty(),
+    (0, express_validator_1.check)("email", "Email is required").notEmpty(),
+    (0, express_validator_1.check)("email", "Invalid Email").isEmail(),
+    (0, express_validator_1.check)("prefectures", "Prefecture is required").isInt({ min: 1, max: 47 }),
+    (0, express_validator_1.check)("business_form", "Business form is required").isInt({ min: 1, max: 3 }),
+    (0, express_validator_1.check)("paying_status", "Paying status must be a valid number").optional().isInt({ min: 1, max: 3 }),
+    (0, express_validator_1.check)("status", "Status must be a valid string").optional().isIn(['active', 'inactive', 'suspended']),
+    validate,
+];
 exports.default = {
     validate,
     jobSeekerRegisterValidation,
@@ -139,5 +154,6 @@ exports.default = {
     idParamValidation,
     featureValidation,
     columnValidation,
-    recruitingCriteriaValidation
+    recruitingCriteriaValidation,
+    employerUpdateValidation
 };

@@ -411,6 +411,165 @@ const getEmployerById = async (req, res, next) => {
     }
 };
 /**
+ * Update employer by admin
+ * @route PUT /api/employers/:id
+ */
+const updateEmployerByAdmin = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { clinic_name, clinic_name_kana, business_form, zip, prefectures, city, closest_station, tel, home_page_url, access, director_name, employee_number, establishment_year, business, capital_stock, paying_status, subscription_id, subscription_regist_date, subscription_release_date, customer_id, status } = req.body;
+        const employer = await Employer.findByPk(id);
+        if (!employer) {
+            throw new NotFoundError('Employer not found');
+        }
+        // Check if email is being updated and if it already exists in either employers or job seekers
+        if (req.body.email && req.body.email !== employer.email) {
+            // Check if email exists in employers table (excluding current employer)
+            const existingEmployer = await Employer.findOne({
+                where: {
+                    email: req.body.email,
+                    id: { [sequelize_1.Op.ne]: id } // Exclude current employer
+                }
+            });
+            if (existingEmployer) {
+                throw new BadRequestError('Email already in use by another employer');
+            }
+            // Check if email exists in job seekers table
+            const existingJobSeeker = await JobSeeker.findOne({
+                where: {
+                    email: req.body.email,
+                    deleted: null // Only check active job seekers
+                }
+            });
+            if (existingJobSeeker) {
+                throw new BadRequestError('Email already in use by a job seeker');
+            }
+        }
+        // Update employer data
+        await employer.update({
+            clinic_name,
+            clinic_name_kana,
+            business_form,
+            zip,
+            prefectures,
+            city,
+            closest_station,
+            tel,
+            email: req.body.email,
+            home_page_url,
+            access,
+            director_name,
+            employee_number,
+            establishment_year,
+            business,
+            capital_stock,
+            paying_status,
+            subscription_id,
+            subscription_regist_date,
+            subscription_release_date,
+            customer_id,
+            status,
+            modified: new Date()
+        });
+        // Return response
+        res.status(200).json({
+            success: true,
+            message: 'Employer updated successfully',
+            data: {
+                ...employer.toJSON(),
+                password: undefined
+            }
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+/**
+ * Delete employer by admin (soft delete)
+ * @route DELETE /api/employers/:id
+ */
+const deleteEmployerByAdmin = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const employer = await Employer.findByPk(id);
+        if (!employer) {
+            throw new NotFoundError('Employer not found');
+        }
+        if (employer.deleted) {
+            throw new BadRequestError('Employer is already deleted');
+        }
+        // Check if employer has active jobs
+        const activeJobsCount = await JobInfo.count({
+            where: {
+                employer_id: id,
+                deleted: null,
+                public_status: 1
+            }
+        });
+        if (activeJobsCount > 0) {
+            throw new BadRequestError(`Cannot delete employer with ${activeJobsCount} active job postings. Please deactivate all jobs first.`);
+        }
+        // Check if employer has pending applications
+        const pendingApplicationsCount = await ApplicationHistory.count({
+            where: {
+                job_info_id: {
+                    [sequelize_1.Op.in]: sequelize_1.Sequelize.literal(`(SELECT id FROM job_infos WHERE employer_id = ${id})`)
+                }
+            }
+        });
+        if (pendingApplicationsCount > 0) {
+            throw new BadRequestError(`Cannot delete employer with ${pendingApplicationsCount} pending applications. Please handle all applications first.`);
+        }
+        // Soft delete the employer
+        await employer.update({
+            deleted: new Date(),
+            modified: new Date()
+        });
+        // Return response
+        res.status(200).json({
+            success: true,
+            message: 'Employer deleted successfully'
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+/**
+ * Restore deleted employer by admin
+ * @route PUT /api/employers/:id/restore
+ */
+const restoreEmployerByAdmin = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const employer = await Employer.findByPk(id);
+        if (!employer) {
+            throw new NotFoundError('Employer not found');
+        }
+        if (!employer.deleted) {
+            throw new BadRequestError('Employer is not deleted');
+        }
+        // Restore the employer
+        await employer.update({
+            deleted: null,
+            modified: new Date()
+        });
+        // Return response
+        res.status(200).json({
+            success: true,
+            message: 'Employer restored successfully',
+            data: {
+                ...employer.toJSON(),
+                password: undefined
+            }
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+/**
  * Helper function to validate email format
  */
 function isValidEmail(email) {
@@ -425,5 +584,8 @@ exports.default = {
     getEmployerDashboard,
     getEmployerById,
     getAllEmployerInfos,
-    getAllEmployers
+    getAllEmployers,
+    updateEmployerByAdmin,
+    deleteEmployerByAdmin,
+    restoreEmployerByAdmin
 };

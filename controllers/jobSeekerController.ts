@@ -10,6 +10,7 @@ const {
   FavoriteJob,
   ImagePath,
   JobInfo,
+  Employer,
 } = db;
 import errorTypes from "../utils/errorTypes";
 const { NotFoundError, BadRequestError, ForbiddenError } = errorTypes;
@@ -210,13 +211,28 @@ const changeEmail = async (req: any, res: any, next: any) => {
       throw new UnauthorizedError("Invalid password");
     }
 
-    // Check if the new email already exists
+    // Check if the new email already exists in either job seekers or employers
     const existingJobSeeker = await JobSeeker.findOne({
-      where: { email: newEmail },
+      where: { 
+        email: newEmail,
+        id: { [Op.ne]: id } // Exclude current job seeker
+      },
     });
 
     if (existingJobSeeker) {
-      throw new BadRequestError("Email already in use");
+      throw new BadRequestError("Email already in use by another job seeker");
+    }
+    
+    // Check if email exists in employers table
+    const existingEmployer = await Employer.findOne({
+      where: { 
+        email: newEmail,
+        deleted: null // Only check active employers
+      }
+    });
+    
+    if (existingEmployer) {
+      throw new BadRequestError("Email already in use by an employer");
     }
 
     // Update email
@@ -255,7 +271,6 @@ const getFavoriteJobs = async (req: any, res: any, next: any) => {
           as: "jobInfo",
           include: [
             {
-              // @ts-expect-error TS(2304): Cannot find name 'Employer'.
               model: Employer,
               as: "employer",
               attributes: ["id", "clinic_name", "prefectures", "city"],

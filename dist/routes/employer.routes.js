@@ -17,8 +17,11 @@ router.put('/change-email', verifyToken, isEmployer, employerController_1.defaul
 router.get('/jobs', verifyToken, isEmployer, employerController_1.default.getEmployerJobs);
 // Dashboard route
 router.get('/dashboard', verifyToken, isEmployer, employerController_1.default.getEmployerDashboard);
-//Admin
+//Admin routes
 router.get('/', verifyToken, isAdmin, employerController_1.default.getAllEmployers);
 router.get('/infos', verifyToken, isAdmin, employerController_1.default.getAllEmployerInfos);
 router.get('/:id', verifyToken, isAdmin, employerController_1.default.getEmployerById);
+router.put('/:id', verifyToken, isAdmin, validationMiddleware_1.default.employerUpdateValidation, employerController_1.default.updateEmployerByAdmin);
+router.delete('/:id', verifyToken, isAdmin, employerController_1.default.deleteEmployerByAdmin);
+router.put('/:id/restore', verifyToken, isAdmin, employerController_1.default.restoreEmployerByAdmin);
 exports.default = router;

@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const sequelize_1 = require("sequelize");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const models_1 = __importDefault(require("../models"));
-const { JobSeeker, EmploymentType, DesiredCondition, JobSeekersEmploymentType, JobSeekersDesiredCondition, FavoriteJob, ImagePath, JobInfo, } = models_1.default;
+const { JobSeeker, EmploymentType, DesiredCondition, JobSeekersEmploymentType, JobSeekersDesiredCondition, FavoriteJob, ImagePath, JobInfo, Employer, } = models_1.default;
 const errorTypes_1 = __importDefault(require("../utils/errorTypes"));
 const { NotFoundError, BadRequestError, ForbiddenError } = errorTypes_1.default;
 const logger_1 = __importDefault(require("../utils/logger"));
@@ -165,12 +165,25 @@ const changeEmail = async (req, res, next) => {
             // @ts-expect-error TS(2304): Cannot find name 'UnauthorizedError'.
             throw new UnauthorizedError("Invalid password");
         }
-        // Check if the new email already exists
+        // Check if the new email already exists in either job seekers or employers
         const existingJobSeeker = await JobSeeker.findOne({
-            where: { email: newEmail },
+            where: {
+                email: newEmail,
+                id: { [sequelize_1.Op.ne]: id } // Exclude current job seeker
+            },
         });
         if (existingJobSeeker) {
-            throw new BadRequestError("Email already in use");
+            throw new BadRequestError("Email already in use by another job seeker");
+        }
+        // Check if email exists in employers table
+        const existingEmployer = await Employer.findOne({
+            where: {
+                email: newEmail,
+                deleted: null // Only check active employers
+            }
+        });
+        if (existingEmployer) {
+            throw new BadRequestError("Email already in use by an employer");
         }
         // Update email
         await jobSeeker.update({
@@ -206,7 +219,6 @@ const getFavoriteJobs = async (req, res, next) => {
                     as: "jobInfo",
                     include: [
                         {
-                            // @ts-expect-error TS(2304): Cannot find name 'Employer'.
                             model: Employer,
                             as: "employer",
                             attributes: ["id", "clinic_name", "prefectures", "city"],
